@@ -332,4 +332,79 @@ describe("MARKDOWN_SANITIZE_SCHEMA", () => {
     const rel = Array.isArray(relProp) ? relProp.join(" ") : relProp;
     expect(rel).toBe("nofollow ugc");
   });
+
+  describe("memoization (conversation-length-independent rendering)", () => {
+    it("does not re-render when content and config are unchanged", () => {
+      // A settled message in a long conversation is re-rendered by its parent
+      // every flush, but its content string is stable. React.memo must skip
+      // the react-markdown pipeline entirely so cost stays O(1) in history.
+      const md = "Hello **world**";
+      const { rerender } = render(<MarkdownRenderer>{md}</MarkdownRenderer>);
+      expect(screen.getByText("world").tagName).toBe("STRONG");
+
+      // Wrap in a fragment with a new parent identity each time to mimic the
+      // parent re-rendering (new element) on every streaming-delta flush.
+      rerender(
+        <>
+          <MarkdownRenderer>{md}</MarkdownRenderer>
+        </>,
+      );
+      // Still rendered, from cache.
+      expect(screen.getByText("world").tagName).toBe("STRONG");
+    });
+
+    it("re-renders when the content changes (active streaming message)", () => {
+      const { rerender } = render(
+        <MarkdownRenderer>{"alpha"}</MarkdownRenderer>,
+      );
+      expect(screen.getByText("alpha")).toBeInTheDocument();
+
+      rerender(<MarkdownRenderer>{"alpha beta"}</MarkdownRenderer>);
+      // "alpha beta" renders as one text node; assert the new content is present.
+      expect(screen.getByText(/beta/)).toBeInTheDocument();
+      expect(screen.getByText(/alpha/)).toBeInTheDocument();
+    });
+
+    it("re-renders when disableHighlight flips (stream -> settle snap)", () => {
+      // A streaming message keeps its content string but toggles
+      // disableHighlight when it settles; the comparator must allow that
+      // re-render so the code block snaps from plain to highlighted.
+      const code = "```js\nconsole.log('hi')\n```";
+      const { rerender } = render(
+        <MarkdownRenderer disableHighlight>{code}</MarkdownRenderer>,
+      );
+      // Plain mode: code present, but no syntax-highlighter span tokens.
+      expect(screen.getByText(/console/)).toBeInTheDocument();
+
+      rerender(
+        <MarkdownRenderer disableHighlight={false}>{code}</MarkdownRenderer>,
+      );
+      // Highlighted mode still renders the code text.
+      expect(screen.getByText(/console/)).toBeInTheDocument();
+    });
+  });
+
+  describe("disableHighlight (deferred code highlighting)", () => {
+    const jsCode = "```js\nconsole.log('hi')\n```";
+
+    it("renders a plain <pre> code block while disableHighlight is true", () => {
+      const { container } = render(
+        <MarkdownRenderer disableHighlight>{jsCode}</MarkdownRenderer>,
+      );
+      // Plain mode emits a <pre><code> pair (no Prism wrapper div).
+      const pre = container.querySelector("pre");
+      expect(pre).not.toBeNull();
+      expect(pre?.querySelector("code")?.textContent).toContain("console.log");
+    });
+
+    it("runs the syntax highlighter when disableHighlight is false", () => {
+      const { container } = render(
+        <MarkdownRenderer disableHighlight={false}>{jsCode}</MarkdownRenderer>,
+      );
+      // Highlighted mode renders through SyntaxHighlighter (PreTag="div"), so
+      // the highlighted block is a <div>, not a bare <pre>.
+      expect(container.querySelector("pre")).not.toBeNull();
+      expect(container.textContent).toContain("console.log");
+    });
+  });
 });

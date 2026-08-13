@@ -29,6 +29,14 @@ interface ChatMessageProps {
   onRetry?: () => void;
   onDismiss?: () => void;
   onStop?: () => void;
+  /**
+   * True while this message is actively receiving streaming tokens. While
+   * streaming, code blocks render as plain `<pre>` (no Prism highlight) so the
+   * growing content doesn't block the main thread every animation frame; the
+   * block snaps to highlighted on the first settled render. See
+   * `MarkdownRenderer`'s `disableHighlight`.
+   */
+  isStreaming?: boolean;
 }
 
 export function ChatMessage({
@@ -41,6 +49,7 @@ export function ChatMessage({
   onRetry,
   onDismiss,
   onStop,
+  isStreaming = false,
 }: React.PropsWithChildren<ChatMessageProps>) {
   const { t } = useTranslation("openhands");
   const [isHovering, setIsHovering] = React.useState(false);
@@ -129,6 +138,7 @@ export function ChatMessage({
         includeStandard
         includeHeadings
         allowHtml={type !== "user"}
+        disableHighlight={isStreaming}
         components={chatBubbleMarkdownComponents}
       >
         {message}

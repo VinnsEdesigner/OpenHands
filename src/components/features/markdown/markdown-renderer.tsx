@@ -1,3 +1,4 @@
+import React from "react";
 import Markdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -5,7 +6,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Schema } from "hast-util-sanitize";
 import type { PluggableList } from "unified";
-import { code } from "./code";
+import { createCodeComponent } from "./code";
 import { ul, ol, li } from "./list";
 import { paragraph } from "./paragraph";
 import { anchor } from "./anchor";
@@ -116,7 +117,24 @@ interface MarkdownRendererProps {
    * blocks, anchor targets, etc.).
    */
   allowHtml?: boolean;
+  /**
+   * Skip syntax highlighting for fenced code blocks and render them as
+   * plain copyable `<pre>`. Use this while a message is actively
+   * streaming: Prism tokenization is the most expensive step in the
+   * markdown pipeline, so deferring it until the message settles keeps a
+   * fast model's token stream from blocking the main thread every frame.
+   * The block snaps to highlighted on the first render with
+   * `disableHighlight` false (i.e. once the message is settled).
+   */
+  disableHighlight?: boolean;
 }
+
+// `remarkPlugins` is a module-level constant: the plugin list never changes,
+// so a single stable array reference is reused across every render. Passing a
+// fresh array literal to react-markdown on each render would defeat its
+// internal memoization and force a full re-parse even when the content is
+// unchanged.
+const REMARK_PLUGINS = [remarkGithubAlerts, remarkGfm, remarkBreaks];
 
 /**
  * A reusable Markdown renderer component that provides consistent
@@ -130,40 +148,62 @@ interface MarkdownRendererProps {
  * - includeStandard: adds anchor and paragraph components
  * - includeHeadings: adds h1-h6 heading components
  * - components prop: allows custom overrides or additional components
+ *
+ * Performance: wrapped in `React.memo` with a content-keyed comparator. A
+ * settled message (content unchanged between renders) is returned from cache
+ * without re-running the react-markdown pipeline at all — this is what keeps
+ * rendering cost independent of how many messages already exist in the
+ * conversation. Only the actively-streaming message, whose content changes
+ * each flush, re-parses; and with `disableHighlight` it does so without the
+ * Prism tokenization cost until it settles.
  */
-export function MarkdownRenderer({
+function MarkdownRendererImpl({
   children,
   content,
   components: customComponents,
   includeStandard = false,
   includeHeadings = false,
   allowHtml = true,
+  disableHighlight = false,
 }: MarkdownRendererProps) {
-  // Build the components object with defaults and optional additions
-  const components: Components = {
-    code,
-    ul,
-    ol,
-    li,
-    hr,
-    table,
-    th,
-    td,
-    blockquote,
-    ...(includeStandard && {
-      a: anchor,
-      p: paragraph,
+  // The components object is memoized so its reference is stable across
+  // renders that don't change the configuration. A fresh object literal here
+  // would propagate a new `components` prop into react-markdown every render
+  // and invalidate its memo, re-parsing even when the markdown string is
+  // identical. The `code` component is built from `createCodeComponent` so it
+  // can switch between highlighted and plain rendering without disturbing the
+  // rest of the map.
+  const components: Components = React.useMemo(
+    () => ({
+      code: createCodeComponent(disableHighlight),
+      ul,
+      ol,
+      li,
+      hr,
+      table,
+      th,
+      td,
+      blockquote,
+      ...(includeStandard && {
+        a: anchor,
+        p: paragraph,
+      }),
+      ...(includeHeadings && {
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6,
+      }),
+      ...customComponents, // Custom components override defaults
     }),
-    ...(includeHeadings && {
-      h1,
-      h2,
-      h3,
-      h4,
-      h5,
-      h6,
-    }),
-    ...customComponents, // Custom components override defaults
-  };
+    // customComponents is a stable ref for real callers (module-level consts
+    // like `chatBubbleMarkdownComponents`, or undefined). If a caller ever
+    // passes an inline object it opts out of memoization here, which is the
+    // correct (safe) fallback.
+    [includeStandard, includeHeadings, disableHighlight, customComponents],
+  );
 
   const markdownContent = content ?? children ?? "";
 
@@ -171,15 +211,19 @@ export function MarkdownRenderer({
   // tree. `rehype-sanitize` then strips anything dangerous (scripts,
   // event handlers, `javascript:` URLs, etc.). The order matters: sanitize
   // must run *after* raw so it sees the parsed HTML nodes.
-  const rehypePlugins: PluggableList | undefined = allowHtml
-    ? [rehypeRaw, [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA]]
-    : undefined;
+  const rehypePlugins: PluggableList | undefined = React.useMemo(
+    () =>
+      allowHtml
+        ? [rehypeRaw, [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA]]
+        : undefined,
+    [allowHtml],
+  );
 
   return (
     <div data-testid="markdown-renderer">
       <Markdown
         components={components}
-        remarkPlugins={[remarkGithubAlerts, remarkGfm, remarkBreaks]}
+        remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={rehypePlugins}
       >
         {markdownContent}
@@ -187,3 +231,16 @@ export function MarkdownRenderer({
     </div>
   );
 }
+
+export const MarkdownRenderer = React.memo(
+  MarkdownRendererImpl,
+  (prev, next) =>
+    (prev.content ?? prev.children) === (next.content ?? next.children) &&
+    prev.includeStandard === next.includeStandard &&
+    prev.includeHeadings === next.includeHeadings &&
+    prev.allowHtml === next.allowHtml &&
+    prev.disableHighlight === next.disableHighlight &&
+    prev.components === next.components,
+);
+
+MarkdownRenderer.displayName = "MarkdownRenderer";

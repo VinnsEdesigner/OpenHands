@@ -201,6 +201,70 @@ describe("ConversationWebSocketProvider — conversation-scoped event store", ()
     );
   });
 
+  it("subscribes with resend_mode='since' anchored to the latest REST event", async () => {
+    // The beforeEach stub returns a single user message with a timestamp,
+    // so initialAfterTimestamp is set → the WS must use `since`, never `all`.
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ConversationWebSocketProvider
+          conversationId="conv-since"
+          conversationUrl="http://localhost/api"
+          sessionApiKey={`sk-oh-${"s".repeat(64)}`}
+        >
+          <div />
+        </ConversationWebSocketProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(wsCapture.mainOptions).not.toBeNull());
+
+    expect(wsCapture.mainOptions?.queryParams?.resend_mode).toBe("since");
+    expect(wsCapture.mainOptions?.queryParams).toHaveProperty(
+      "after_timestamp",
+    );
+    expect(wsCapture.mainOptions?.queryParams?.resend_mode).not.toBe("all");
+  });
+
+  it("never uses resend_mode='all', even when REST returns no events", async () => {
+    // A conversation whose REST preload yields no events (e.g. a REST error or
+    // a brand-new conversation). The old code fell back to resend_mode='all',
+    // replaying the entire history one event at a time. The fix subscribes
+    // live-only (no resend params) instead.
+    vi.spyOn(EventService, "searchEvents").mockResolvedValueOnce({
+      items: [],
+      next_page_id: null,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ConversationWebSocketProvider
+          conversationId="conv-empty"
+          conversationUrl="http://localhost/api"
+          sessionApiKey={`sk-oh-${"e".repeat(64)}`}
+        >
+          <div />
+        </ConversationWebSocketProvider>
+      </QueryClientProvider>,
+    );
+
+    // The mock only captures mainOptions when resend_mode is present, so look
+    // the call up from the captured calls list instead.
+    await waitFor(() =>
+      expect(
+        wsCapture.calls.some(({ url }) =>
+          url.endsWith("/sockets/events/conv-empty"),
+        ),
+      ).toBe(true),
+    );
+
+    const mainCall = wsCapture.calls.find(({ url }) =>
+      url.endsWith("/sockets/events/conv-empty"),
+    );
+
+    expect(mainCall?.options?.queryParams).not.toHaveProperty("resend_mode");
+    expect(mainCall?.options?.queryParams).not.toHaveProperty("resend_all");
+  });
+
   it("uses the planning sub-conversation session key", async () => {
     const mainSessionApiKey = `sk-oh-main-${"m".repeat(48)}`;
     const planningSessionApiKey = `sk-oh-plan-${"p".repeat(48)}`;
@@ -255,9 +319,17 @@ describe("ConversationWebSocketProvider — conversation-scoped event store", ()
       "ws://planner.example/sockets/events/planning-auth",
     );
     expect(planningCall?.options?.sessionApiKey).toBe(planningSessionApiKey);
-    expect(planningCall?.options?.queryParams).toEqual({ resend_all: true });
+    // The planning socket no longer requests a full history replay
+    // (resend_all: true); it subscribes to live events only. Replaying the
+    // entire planning history over the socket one event at a time made
+    // opening a long plan take minutes.
+    expect(planningCall?.options?.queryParams).toEqual({});
     expect(planningCall?.options?.queryParams).not.toHaveProperty(
       "session_api_key",
+    );
+    expect(planningCall?.options?.queryParams).not.toHaveProperty("resend_all");
+    expect(planningCall?.options?.queryParams).not.toHaveProperty(
+      "resend_mode",
     );
   });
 
