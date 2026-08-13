@@ -417,13 +417,35 @@ const server = createServer((req, res) => {
   // agent server, so it works in pure-cloud mode where /alive and /health are
   // agent-server prefixes that return 503. Use this as the deployment health
   // check (e.g. render.yaml `healthCheckPath`).
+  //
+  // When STATIC_DIR is configured, the probe only reports ok once the SPA
+  // entry point (index.html) is actually readable. This keeps Render from
+  // marking the service "live" before the static build is on disk, which would
+  // otherwise serve {"error":"not_found"} JSON for every page while /healthz
+  // stayed green (buildCommand and startCommand run sequentially, but a build
+  // step that fails to emit build/index.html — or a cold start racing the
+  // filesystem — would otherwise slip through).
   if (req.method === "GET" && req.url.split("?")[0] === "/healthz") {
-    sendJson(res, 200, {
-      ok: true,
-      service: "cloud-proxy-relay",
-      agent_server: AGENT_SERVER_URL ? "enabled" : "disabled",
-      static_dir: Boolean(STATIC_DIR),
-    });
+    let staticReady = !STATIC_DIR; // no static dir = nothing to verify
+    const finish = () =>
+      sendJson(res, staticReady ? 200 : 503, {
+        ok: staticReady,
+        service: "cloud-proxy-relay",
+        agent_server: AGENT_SERVER_URL ? "enabled" : "disabled",
+        static_dir: Boolean(STATIC_DIR),
+      });
+    if (!STATIC_DIR) {
+      finish();
+      return;
+    }
+    stat(join(STATIC_DIR, "index.html"))
+      .then((s) => {
+        staticReady = s.isFile();
+      })
+      .catch(() => {
+        staticReady = false;
+      })
+      .then(finish);
     return;
   }
 
