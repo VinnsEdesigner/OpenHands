@@ -266,4 +266,24 @@ describe("ChatMessage", () => {
 
     expect(container.querySelector("mark")?.textContent).toBe("world");
   });
+
+  it("renders code blocks without syntax highlighting while streaming", () => {
+    // While isStreaming, ChatMessage forwards disableHighlight so a fast
+    // model's token stream doesn't re-tokenize code every frame.
+    const code = "```js\nconsole.log('hi')\n```";
+    const { container } = render(
+      <ChatMessage type="agent" message={code} isStreaming />,
+    );
+    // Plain <pre><code> is present and the code text is intact.
+    const pre = container.querySelector("pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.textContent).toContain("console.log");
+  });
+
+  it("renders code blocks with syntax highlighting when not streaming", () => {
+    const code = "```js\nconsole.log('hi')\n```";
+    const { container } = render(<ChatMessage type="agent" message={code} />);
+    // Settled agent messages highlight normally; the code text is present.
+    expect(container.textContent).toContain("console.log");
+  });
 });

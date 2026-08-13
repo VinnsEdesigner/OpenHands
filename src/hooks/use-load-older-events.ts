@@ -8,6 +8,7 @@ import {
 } from "#/hooks/query/use-conversation-history";
 import { isTaskConversationId } from "#/utils/conversation-local-storage";
 import { seedModelSwitchesFromHistory } from "#/hooks/chat/record-model-switch-message";
+import { isSdkHttpError } from "#/api/agent-server-compatibility";
 import type { OpenHandsEvent } from "#/types/agent-server/core";
 
 const getEventTimestamp = (event: OpenHandsEvent): string | undefined =>
@@ -159,6 +160,19 @@ export const useLoadOlderEvents = (
         hasMoreRef.current = false;
         setHasMore(false);
       }
+    } catch (error) {
+      // Older-events pagination is best-effort background loading: the user
+      // already sees the most recent page, so a transient failure (429
+      // rate-limit, 5xx) should not surface an error banner — just stop
+      // paginating and leave the already-loaded history intact. A non-
+      // transient error still propagates so the caller can surface it.
+      const status = isSdkHttpError(error)
+        ? (error as { status: number }).status
+        : null;
+      const isTransient = status === 429 || (status !== null && status >= 500);
+      if (!isTransient) throw error;
+      hasMoreRef.current = false;
+      setHasMore(false);
     } finally {
       isLoadingRef.current = false;
       setIsLoading(false);

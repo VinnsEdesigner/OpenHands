@@ -8,6 +8,7 @@ import {
   getAgentServerClientOptions,
   getAgentServerHttpClientOptions,
 } from "../agent-server-client-options";
+import { isSdkHttpError } from "../agent-server-compatibility";
 import type {
   ConfirmationResponseRequest,
   ConfirmationResponseResponse,
@@ -116,13 +117,19 @@ class EventService {
       // require the server-side fix from OpenHands/OpenHands#14399. If
       // the cloud backend hasn't been updated yet, the timestamp filters
       // trigger a 500 (str-vs-datetime comparison). We attempt the full
-      // request first and fall back to a limit-only request on failure.
+      // request first; on failure we retry with the timestamp filters
+      // dropped (sort_order + page_id + limit only) so the caller still
+      // gets the most-recent events and the UI can open at the last
+      // message instead of falling back to a full WebSocket replay.
       const cloudLimit = Math.min(limit, 100);
       const hasFilterParams = !!(
         options.sortOrder ||
         options.pageId ||
         options.timestampGte ||
         options.timestampLt
+      );
+      const hasTimestampFilters = !!(
+        options.timestampGte || options.timestampLt
       );
 
       const params = new URLSearchParams();
@@ -147,13 +154,62 @@ class EventService {
           next_page_id: data?.next_page_id ?? null,
         };
       } catch (err) {
-        if (!hasFilterParams) throw err;
+        // Transient failures (429 rate-limit, 5xx) must propagate so the
+        // query layer retries them — silently degrading to an empty page
+        // here would cache a blank history and render an already-finished
+        // conversation as empty. The degrade-to-empty fallback below exists
+        // only for the #14399 server bug (500 on timestamp filters), not for
+        // retries that could still succeed.
+        const status = isSdkHttpError(err)
+          ? (err as { status: number }).status
+          : null;
+        const isTransient =
+          status === 429 || (status !== null && status >= 500);
+        if (!hasFilterParams || isTransient) throw err;
         if (options.strictPagination) throw err;
 
-        // Server doesn't support timestamp filters yet — stop pagination
-        // by returning an empty page so the UI doesn't retry indefinitely.
-        // A limit-only fallback would return the same most-recent events
-        // already in the store, which get deduped but keep hasMore=true.
+        // If the failure involved timestamp filters, retry without them —
+        // #14399's 500 is a str-vs-datetime comparison that only affects
+        // timestamp__gte/__lt, not sort_order or page_id. Keeping sort_order
+        // preserves DESC ordering (so the caller's reverse-to-chronological
+        // stays correct) while avoiding the broken filter. Only if the
+        // retry also fails (or there were no timestamp filters to drop) do
+        // we degrade to an empty page so pagination stops instead of looping.
+        if (hasTimestampFilters) {
+          const retriedParams = new URLSearchParams();
+          retriedParams.set("limit", String(cloudLimit));
+          if (options.sortOrder)
+            retriedParams.set("sort_order", options.sortOrder);
+          if (options.pageId) retriedParams.set("page_id", options.pageId);
+          try {
+            const data = await doCloudSearch(retriedParams);
+            return {
+              items: data?.items ?? [],
+              next_page_id: data?.next_page_id ?? null,
+            };
+          } catch (retryErr) {
+            // Still transient after dropping timestamp filters — propagate
+            // rather than caching an empty page.
+            const retryStatus = isSdkHttpError(retryErr)
+              ? (retryErr as { status: number }).status
+              : null;
+            if (
+              retryStatus === 429 ||
+              (retryStatus !== null && retryStatus >= 500)
+            ) {
+              throw retryErr;
+            }
+            console.warn(
+              "[EventService] Cloud backend rejected both full-param and " +
+                "limit+sort retry. Falling back to empty page. " +
+                "Server needs OpenHands/OpenHands#14399.",
+            );
+            return { items: [], next_page_id: null };
+          }
+        }
+
+        // No timestamp filters to drop — the failure is from sort_order/
+        // page_id themselves. Stop pagination to avoid an infinite loop.
         console.warn(
           "[EventService] Cloud backend doesn't support pagination filters. " +
             "Falling back to initial load only. " +

@@ -965,13 +965,23 @@ export function ConversationWebSocketProvider({
   const mainWebsocketOptions: WebSocketHookOptions = useMemo(() => {
     // History was already loaded over REST (`useConversationHistory`).
     // Subscribe with `resend_mode='since'` so the server only resends events
-    // strictly after the latest one we already have. If REST returned no
-    // events at all (brand-new conversation), fall back to `'all'` so any
-    // events that may have been written between the REST call and the WS
-    // handshake still show up. Dedup in the event store handles overlap.
+    // strictly after the latest one we already have. When REST yielded no
+    // timestamp (brand-new conversation, or a REST error/empty result) we
+    // send NO resend params — the socket subscribes to live events only.
+    //
+    // We deliberately never use `resend_mode='all'` here. That mode makes the
+    // server replay every stored event over the socket one-by-one (a separate
+    // WS message per event, each read from its own on-disk file), which for a
+    // long conversation takes minutes to hours and forces the UI to re-render
+    // the entire history from the first message. Every other chat UI opens at
+    // the last message; this matches that. The REST preload + `since` is the
+    // fast path; on its failure, live-only is the safe fallback — the user
+    // sees new activity immediately instead of waiting for a full replay. Any
+    // gap between the REST fetch and the WS handshake is sub-second and
+    // self-corrects via the store's dedup on the next `since` window.
     const queryParams: Record<string, string | boolean> = initialAfterTimestamp
       ? { resend_mode: "since", after_timestamp: initialAfterTimestamp }
-      : { resend_mode: "all" };
+      : {};
 
     return {
       queryParams,
@@ -1004,9 +1014,16 @@ export function ConversationWebSocketProvider({
 
   // Separate WebSocket options for planning agent connection
   const planningWebsocketOptions: WebSocketHookOptions = useMemo(() => {
-    const queryParams: Record<string, string | boolean> = {
-      resend_all: true,
-    };
+    // The planning sub-conversation has no REST history preload, so we cannot
+    // anchor a `since` resend. We send NO resend params (live-only) rather
+    // than `resend_all: true`: the latter made the server replay the entire
+    // planning history over the socket one event at a time, which — like the
+    // main connection's `all` mode — could take minutes for a long plan and
+    // blocked the UI from reaching the latest state. Live-only means a
+    // freshly-opened planning conversation shows new steps as they arrive;
+    // existing planning state is re-derived from the main conversation's
+    // persisted events where needed.
+    const queryParams: Record<string, string | boolean> = {};
 
     const planningAgentConversation = subConversations?.[0];
     const planningApiKey =
@@ -1021,7 +1038,14 @@ export function ConversationWebSocketProvider({
         hasConnectedRefPlanning.current = true; // Mark that we've successfully connected
         clearConnectionError(); // Clear a previous connection error; keep sticky conversation errors
 
-        // Fetch expected event count for history loading detection
+        // Fetch expected event count for history loading detection.
+        //
+        // We no longer request `resend_all`, so the socket does NOT replay
+        // historical planning events — only live ones arrive. The count is
+        // therefore not a "how many events to wait for" gate anymore; it's
+        // informational. Mark loading complete as soon as the count resolves
+        // (or on error) so the planning panel never sticks on a spinner
+        // waiting for events that will never be resent.
         if (
           planningAgentConversation?.id &&
           planningAgentConversation.conversation_url
@@ -1033,15 +1057,14 @@ export function ConversationWebSocketProvider({
               planningAgentConversation.session_api_key,
             );
             setExpectedEventCountPlanning(count);
-
-            // If no events expected, mark as loaded immediately
-            if (count === 0) {
-              setIsLoadingHistoryPlanning(false);
-            }
           } catch (error) {
             // Fall back to marking as loaded to avoid infinite loading state
+            setExpectedEventCountPlanning(null);
+          } finally {
             setIsLoadingHistoryPlanning(false);
           }
+        } else {
+          setIsLoadingHistoryPlanning(false);
         }
       },
       onClose: () => {

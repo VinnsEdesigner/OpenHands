@@ -350,9 +350,17 @@ describe("ConversationWebSocketProvider — conversation-scoped event store", ()
       "ws://planner.example/sockets/events/planning-auth",
     );
     expect(planningCall?.options?.sessionApiKey).toBe(planningSessionApiKey);
-    expect(planningCall?.options?.queryParams).toEqual({ resend_all: true });
+    // The planning socket no longer requests a full history replay
+    // (resend_all: true); it subscribes to live events only. Replaying the
+    // entire planning history over the socket one event at a time made
+    // opening a long plan take minutes.
+    expect(planningCall?.options?.queryParams).toEqual({});
     expect(planningCall?.options?.queryParams).not.toHaveProperty(
       "session_api_key",
+    );
+    expect(planningCall?.options?.queryParams).not.toHaveProperty("resend_all");
+    expect(planningCall?.options?.queryParams).not.toHaveProperty(
+      "resend_mode",
     );
   });
 

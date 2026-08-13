@@ -5,6 +5,7 @@ import { useUserProviders } from "../use-user-providers";
 import { useActiveBackend } from "#/contexts/active-backend-context";
 import { Provider } from "#/types/settings";
 import { shouldUseInstallationRepos } from "#/utils/utils";
+import { retryOnTransient } from "#/utils/react-query-retry";
 
 /**
  * Get the first page of app installations for the provider given.
@@ -31,6 +32,10 @@ export const useAppInstallations = (selectedProvider: Provider | null) => {
       active.orgId,
     ],
     queryFn: () => GitService.getUserInstallations(selectedProvider!),
+    // The cloud host rate-limits the conversation-open burst with 429s;
+    // retry those (and 5xx) with backoff instead of failing the
+    // installations list. Non-transient errors fail immediately.
+    retry: retryOnTransient,
     enabled:
       userIsAuthenticated &&
       !!selectedProvider &&

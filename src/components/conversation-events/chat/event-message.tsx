@@ -202,6 +202,9 @@ export function EventMessage({
             type="agent"
             message={message}
             isFromPlanningAgent={isFromPlanningAgent}
+            // This is the actively-streaming message: keep code blocks plain
+            // while tokens arrive so Prism doesn't re-tokenize every frame.
+            isStreaming
           />
         )}
       </>

@@ -5,6 +5,7 @@ import { useConversationId } from "#/hooks/use-conversation-id";
 import { useActiveConversation } from "#/hooks/query/use-active-conversation";
 import { useRuntimeIsReady } from "#/hooks/use-runtime-is-ready";
 import { getGitPath } from "#/utils/get-git-path";
+import { retryOnTransient } from "#/utils/react-query-retry";
 import type { GitChange } from "#/api/open-hands.types";
 
 export const useUnifiedGetGitChanges = () => {
@@ -42,7 +43,7 @@ export const useUnifiedGetGitChanges = () => {
         gitPath,
       );
     },
-    retry: false,
+    retry: retryOnTransient,
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 15, // 15 minutes
     refetchOnMount: "always",

@@ -6,6 +6,7 @@ import { RepositoryPage } from "../../types/git";
 import { Provider } from "../../types/settings";
 import GitService from "#/api/git-service/git-service.api";
 import { shouldUseInstallationRepos } from "#/utils/utils";
+import { retryOnTransient } from "#/utils/react-query-retry";
 
 interface UseGitRepositoriesOptions {
   provider: Provider | null;
@@ -108,6 +109,9 @@ export function useGitRepositories(options: UseGitRepositoriesOptions) {
       !!provider &&
       (!useInstallationRepos ||
         (Array.isArray(installations) && installations.length > 0)),
+    // Cloud rate-limits repo-list bursts with 429; retry transient
+    // failures with backoff instead of failing the repository list.
+    retry: retryOnTransient,
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 15, // 15 minutes
     refetchOnWindowFocus: false,

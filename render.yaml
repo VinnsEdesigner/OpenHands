@@ -1,0 +1,57 @@
+# Render Blueprint for self-hosting Agent Canvas in pure-cloud mode.
+#
+# Deploys a single Node web service that:
+#   1. Builds the Canvas static frontend (`npm run build` → build/)
+#   2. Runs the cloud-proxy relay (`scripts/relay/cloud-proxy-relay.mjs`),
+#      which serves the static build AND forwards /api/cloud-proxy to
+#      OpenHands Cloud with the Bearer key injected server-side.
+#
+# No OSS agent server, no automation backend, no ingress proxy — the relay is
+# the whole stack for the pure-cloud use case (Canvas UI + free cloud LLMs).
+# See scripts/relay/README.md for the architecture and env vars.
+#
+# Required environment variables (set in the Render dashboard, or below under
+# `envVars` with `sync: false` so Render prompts for them):
+#   CLOUD_API_KEY   OpenHands Cloud API key (Bearer)
+#   CLOUD_ORG_ID    Org UUID (X-Org-Id)
+#
+# After the first deploy, open the service URL, add a *cloud* backend in the
+# Canvas (Manage Backends → Add a backend → cloud), and the free model
+# streams through.
+
+services:
+  - type: web
+    name: agent-canvas
+    runtime: node
+    # Node >= 22.12.0 per package.json engines. Render's default Node image
+    # supports this; pin to a recent Node 22 for reproducibility.
+    nodeVersion: "22.14.0"
+    plan: starter
+    region: oregon
+    # Build the static frontend, then start the relay as the single ingress.
+    # AGENT_SERVER_URL="" disables the local-agent reverse-proxy (pure-cloud);
+    # local-protocol prefixes (/api, /sockets, /server_info, …) return a clear
+    # 503 instead of a misleading 502. STATIC_DIR serves the freshly built SPA.
+    buildCommand: npm ci && npm run build
+    startCommand: >
+      STATIC_DIR=build
+      AGENT_SERVER_URL=""
+      PORT=$PORT
+      node scripts/relay/cloud-proxy-relay.mjs
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # Required secrets — set these in the Render dashboard (Environment tab).
+      # Listed here with sync: false so the blueprint does NOT try to read them
+      # from a group/linked env at blueprint-apply time.
+      - key: CLOUD_API_KEY
+        sync: false
+      - key: CLOUD_ORG_ID
+        sync: false
+      # Optional overrides (defaults shown). Uncomment to customize.
+      # - key: CLOUD_HOST
+      #   value: https://app.all-hands.dev
+      # - key: ALLOW_ORIGIN
+      #   value: "*"
+      # - key: PROXY_KEY
+      #   sync: false
