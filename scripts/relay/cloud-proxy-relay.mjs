@@ -27,11 +27,15 @@
  * cookie/session-api-key modes), but Bearer is forced from the server key.
  *
  * Usage:
+ *   CLOUD_API_KEY=<key> node cloud-proxy-relay.mjs
  *   CLOUD_API_KEY=<key> CLOUD_ORG_ID=<org-uuid> node cloud-proxy-relay.mjs
  *
  * Env:
  *   CLOUD_API_KEY   OpenHands Cloud API key (required)
- *   CLOUD_ORG_ID    Org UUID to send as X-Org-Id (required)
+ *   CLOUD_ORG_ID    Org UUID to send as X-Org-Id. When omitted, the relay
+ *                   auto-derives it from the API key via GET /api/keys/current
+ *                   at startup (same flow the Canvas frontend uses), so a user
+ *                   can register a cloud backend with only an API key.
  *   CLOUD_HOST      Cloud host (default https://app.all-hands.dev)
  *   PORT            Relay listen port (default 18080)
  *   ALLOW_ORIGIN    CORS origin to allow for browser preflight (default *)
@@ -55,7 +59,8 @@ import { readFile, stat } from "node:fs/promises";
 import { join, normalize } from "node:path";
 
 const CLOUD_API_KEY = process.env.CLOUD_API_KEY;
-const CLOUD_ORG_ID = process.env.CLOUD_ORG_ID;
+// `let` because when unset we resolve it from /api/keys/current at startup.
+let CLOUD_ORG_ID = process.env.CLOUD_ORG_ID || null;
 const CLOUD_HOST = (process.env.CLOUD_HOST || "https://app.all-hands.dev").replace(/\/+$/, "");
 const PORT = parseInt(process.env.PORT || "18080", 10);
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || "*";
@@ -69,10 +74,39 @@ const AGENT_SERVER_URL =
     : RAW_AGENT_SERVER_URL.replace(/\/+$/, "");
 const STATIC_DIR = process.env.STATIC_DIR || null;
 
-if (!CLOUD_API_KEY || !CLOUD_ORG_ID) {
-  console.error("CLOUD_API_KEY and CLOUD_ORG_ID are required.");
-  console.error("  CLOUD_API_KEY=<key> CLOUD_ORG_ID=<org-uuid> node cloud-proxy-relay.mjs");
+if (!CLOUD_API_KEY) {
+  console.error("CLOUD_API_KEY is required.");
+  console.error("  CLOUD_API_KEY=<key> node cloud-proxy-relay.mjs");
   process.exit(1);
+}
+
+/**
+ * Auto-derive the org ID from the API key, mirroring the Canvas frontend's
+ * getCurrentCloudApiKey(): GET /api/keys/current with just the Bearer token
+ * (no X-Org-Id) and read `org_id` from the response. The cloud resolves the
+ * org from the key itself — one key binds to exactly one org.
+ */
+async function resolveOrgId() {
+  if (CLOUD_ORG_ID) return CLOUD_ORG_ID;
+  const url = new URL("/api/keys/current", CLOUD_HOST);
+  try {
+    const resp = await fetch(url, { headers: { authorization: `Bearer ${CLOUD_API_KEY}` } });
+    if (!resp.ok) {
+      throw new Error(`GET /api/keys/current returned ${resp.status} ${resp.statusText}`);
+    }
+    const data = await resp.json();
+    const orgId = data?.org_id || data?.bound_org_id;
+    if (!orgId) {
+      throw new Error("/api/keys/current did not return an org_id");
+    }
+    CLOUD_ORG_ID = orgId;
+    console.log(`[cloud-proxy-relay] auto-derived org id from API key: ${orgId}`);
+    return CLOUD_ORG_ID;
+  } catch (err) {
+    console.error("Failed to auto-derive CLOUD_ORG_ID from the API key:", err.message);
+    console.error("Set CLOUD_ORG_ID explicitly, or provide a key bound to an org.");
+    process.exit(1);
+  }
 }
 
 const CLOUD_PROXY_PATH = "/api/cloud-proxy";
@@ -475,12 +509,16 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`[cloud-proxy-relay] listening on http://0.0.0.0:${PORT}`);
-  console.log(`  cloud host : ${CLOUD_HOST}`);
-  console.log(`  org id     : ${CLOUD_ORG_ID}`);
-  console.log(`  /api/cloud-proxy -> Cloud (Bearer injected server-side)`);
-  if (AGENT_SERVER_URL) console.log(`  agent-server proxy: ${AGENT_PREFIXES.join(", ")} -> ${AGENT_SERVER_URL}`);
-  else console.log(`  agent-server proxy: ${AGENT_PREFIXES.join(", ")} -> ${CLOUD_HOST} (pure-cloud mode, Bearer injected)`);
-  if (STATIC_DIR) console.log(`  static dir : ${STATIC_DIR}`);
+// Resolve the org ID (from env or auto-derived from the API key) before
+// listening so every proxied request has a valid X-Org-Id from the start.
+resolveOrgId().then(() => {
+  server.listen(PORT, () => {
+    console.log(`[cloud-proxy-relay] listening on http://0.0.0.0:${PORT}`);
+    console.log(`  cloud host : ${CLOUD_HOST}`);
+    console.log(`  org id     : ${CLOUD_ORG_ID}`);
+    console.log(`  /api/cloud-proxy -> Cloud (Bearer injected server-side)`);
+    if (AGENT_SERVER_URL) console.log(`  agent-server proxy: ${AGENT_PREFIXES.join(", ")} -> ${AGENT_SERVER_URL}`);
+    else console.log(`  agent-server proxy: ${AGENT_PREFIXES.join(", ")} -> ${CLOUD_HOST} (pure-cloud mode, Bearer injected)`);
+    if (STATIC_DIR) console.log(`  static dir : ${STATIC_DIR}`);
+  });
 });

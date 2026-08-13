@@ -180,7 +180,10 @@ function getConnectionTestFailedMessage(title: string, error: unknown): string {
 async function testBackendConnection(
   backend: Pick<Backend, "host" | "apiKey" | "kind">,
 ): Promise<BackendConnectionTestMetadata> {
-  // Cloud backends authenticate via OAuth; preflight GET is not applicable.
+  // Cloud backends authenticate against the cloud App API, so the local
+  // server-info preflight does not apply. Connection validity is confirmed by
+  // the health probe that runs after the backend is registered
+  // (`probeBackend` → `getCurrentCloudApiKey`), matching the OAuth path.
   if (backend.kind !== "local") return { agentServerVersion: null };
   const agentServerVersion = await validateLocalBackend(backend, 5000);
   return { agentServerVersion };
@@ -1467,8 +1470,6 @@ function AddBackendChooser({
                     submittingLabel={t(
                       I18nKey.ONBOARDING$BACKEND_STATUS_CHECKING,
                     )}
-                    fixedKind="local"
-                    showKindSelector={false}
                   />
                 </div>
               </div>

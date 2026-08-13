@@ -1,5 +1,59 @@
 # Repository Notes
 
+## Cloud mode through the relay proxy (no OAuth) — investigation notes
+
+When running the Canvas with a custom relay (`scripts/relay/cloud-proxy-relay.mjs`)
+pointing at the closed/managed agent server at all-hands.dev, conversations can be
+created in either frontend mode:
+
+- **Local mode** (`kind: "local"`): talks to all-hands.dev's **runtime agent-server API**
+  (`/api/conversations/...`). Events are stored on the **runtime sandbox only**
+  (ephemeral). The cloud App API has no copy. Opening such a conversation in the
+  cloud SaaS canvas shows the row (via orgID scoping) but **empty events** +
+  "archived, read-only" once the sandbox sleeps — because cloud mode reads event
+  history from the **App API** (`/api/v1/conversation/{id}/events/search`), which
+  was never populated. The sandbox sleeping does NOT delete it (curl wakes it),
+  so the root cause is the **read-path/store mismatch**, not sandbox death.
+- **Cloud mode** (`kind: "cloud"`): talks to all-hands.dev's **App API**
+  (`/api/v1/app-conversations`, `/api/v1/conversation/{id}/events/search`).
+  Events persist in the App API DB and survive sandbox sleep → readable later.
+
+### Key routing fact (`@openhands/typescript-client` CloudClient.request)
+`hostOverride ? requestThroughProxy : requestDirect`. Calls WITHOUT hostOverride
+(conversation creation, event history, health probe) go **direct** from the browser
+to `backend.host` with `Authorization: Bearer ${backend.apiKey}`. Only runtime
+live-events calls (with `hostOverride`) use the `/api/cloud-proxy` envelope.
+
+So for cloud mode to flow through the relay, `backend.host` MUST be the relay
+origin (so "direct" hits the relay), and the relay must reverse-proxy `/api/*` to
+all-hands.dev injecting Bearer. In pure-cloud mode (`AGENT_SERVER_URL=""`), the
+relay's `proxyToCloud` already does this for ALL `/api/*` (including `/api/v1/...`
+App API paths and `/api/keys/current` health probe). `forwardToCloud` handles the
+`/api/cloud-proxy` envelope path. **The relay needs no code change for this.**
+
+### The blocker was frontend-only (now fixed)
+The "Add Backend" settings modal (`AddBackendChooser`) hardcoded
+`ManualConnectionColumn` with `fixedKind="local"` + `showKindSelector={false}`,
+so you could not register a `kind: "cloud"` backend without OAuth. The onboarding
+flow (`BackendConnectionOptions`) already allowed manual cloud registration. Fix
+in `src/components/features/backends/backend-form-modal.tsx`: removed
+`fixedKind="local"`/`showKindSelector={false}` from the AddBackendChooser manual
+column so the Local/Cloud kind selector is visible there too.
+
+### How to use cloud mode through the relay without OAuth
+1. Run the relay in pure-cloud mode:
+   `CLOUD_API_KEY=<key> CLOUD_ORG_ID=<org-uuid> AGENT_SERVER_URL="" node scripts/relay/cloud-proxy-relay.mjs`
+   (set `STATIC_DIR` to serve the Canvas build from the relay so frontend + API
+   are same-origin, avoiding CORS).
+2. In the Canvas Add-Backend / onboarding form, pick the **manual** path, set
+   **Type = Cloud**, **host = relay origin** (e.g. `http://localhost:18080`),
+   and **API key = any non-empty placeholder** (the relay overwrites it with the
+   real Bearer). The post-add health probe (`getCurrentCloudApiKey` →
+   `GET relay/api/keys/current` → relay → all-hands.dev) confirms the connection.
+3. Conversations are now created via the App API path; events persist server-side
+   and survive sandbox sleep.
+
+
 ## General
 
 - This repository is the OpenHands frontend.
