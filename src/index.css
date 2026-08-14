@@ -52,6 +52,21 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/*
+ * Allow the browser's native vertical scrolling/panning but hand horizontal
+ * touch movement to JavaScript. This is what lets the edge-swipe gestures
+ * (open sidebar / open right panel / swipe-to-close) actually receive
+ * touchmove events instead of the browser consuming the horizontal component
+ * as a pan. Vertical scrolling is unaffected, so chat content still scrolls
+ * normally. Applied to the app shell and conversation containers that host
+ * the gesture listeners.
+ */
+[data-testid="root-layout"],
+#root-outlet,
+.conversation-gesture-host {
+  touch-action: pan-y pinch-zoom;
+}
+
 code {
   font-family:
     source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;

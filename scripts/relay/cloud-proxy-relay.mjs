@@ -559,9 +559,15 @@ async function serveStatic(req, res) {
       ico: "image/x-icon",
       woff2: "font/woff2",
     };
-    res.writeHead(200, {
-      "content-type": types[ext] || "application/octet-stream",
-    });
+    const headers = { "content-type": types[ext] || "application/octet-stream" };
+    // The SPA shell (index.html) references hashed asset bundles. After a
+    // redeploy those hashes change, so a cached shell would keep loading the
+    // old JS/CSS forever. Mark it always-revalidate so browsers re-check on
+    // every navigation; hashed assets keep the default (cacheable) behavior.
+    if (ext === "html") {
+      headers["cache-control"] = "no-cache, no-store, must-revalidate";
+    }
+    res.writeHead(200, headers);
     res.end(data);
   } catch {
     sendJson(res, 404, { error: "not_found", path: req.url });

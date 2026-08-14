@@ -52,7 +52,7 @@ export function ConversationMobilePanelPage({
   return (
     <div
       ref={panelRef}
-      className="flex h-full min-h-0 flex-col bg-[var(--oh-surface)]"
+      className="conversation-gesture-host flex h-full min-h-0 flex-col bg-[var(--oh-surface)]"
     >
       <div
         data-testid="conversation-mobile-panel-top"

@@ -91,6 +91,7 @@ export function ConversationMain() {
   return (
     <div
       className={cn(
+        "conversation-gesture-host",
         isMobile
           ? "relative min-h-0 flex-1 flex flex-col"
           : "h-full flex flex-col overflow-hidden",

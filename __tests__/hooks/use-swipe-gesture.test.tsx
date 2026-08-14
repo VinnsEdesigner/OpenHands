@@ -283,4 +283,42 @@ describe("useSwipeGesture", () => {
 
     expect(onSwipe).toHaveBeenCalledTimes(1);
   });
+
+  it("commits a swipe with moderate vertical drift (real-finger tolerance)", () => {
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        onSwipe,
+      }),
+    );
+
+    // Start, drift down a bit, then go mostly horizontal past the threshold.
+    // With HORIZONTAL_DOMINANCE = 1.0 this still commits once |dx| > |dy|.
+    dispatchTouch(document, "touchstart", 100, 100);
+    dispatchTouch(document, "touchmove", 150, 145); // 50px x, 45px y — not yet
+    dispatchTouch(document, "touchmove", 170, 155); // 70px x, 55px y — commits
+    dispatchTouch(document, "touchend", 170, 155);
+
+    expect(onSwipe).toHaveBeenCalledWith("right");
+  });
+
+  it("requires the touch to start within the edge zone for startEdge gestures", () => {
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        startEdge: "left",
+        edgeWidth: 36,
+        onSwipe,
+      }),
+    );
+
+    // Start just outside the 36px left-edge zone.
+    dispatchTouch(document, "touchstart", 40, 100);
+    dispatchTouch(document, "touchmove", 150, 100);
+    dispatchTouch(document, "touchend", 150, 100);
+
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
 });

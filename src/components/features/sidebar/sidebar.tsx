@@ -266,7 +266,7 @@ export function Sidebar() {
             data-testid="sidebar-mobile-drawer"
             aria-hidden={!mobileDrawerVisible}
             className={cn(
-              "fixed inset-y-0 left-0 z-50 flex min-h-0 w-[min(300px,85vw)] flex-col bg-base",
+              "conversation-gesture-host fixed inset-y-0 left-0 z-50 flex min-h-0 w-[min(300px,85vw)] flex-col bg-base",
               "border-r border-[var(--oh-border)] pb-2 pl-2.5 pr-0 md:hidden",
               "transition-transform ease-in-out motion-reduce:transition-none",
               mobileDrawerVisible ? "translate-x-0" : "-translate-x-full",

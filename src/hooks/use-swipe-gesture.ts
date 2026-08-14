@@ -5,23 +5,25 @@ import { useEffect, useRef, type RefObject } from "react";
  * swipe rather than a tap or incidental jitter. Tuned to be larger than a
  * typical tap-drift but small enough to feel responsive on a phone.
  */
-const DEFAULT_THRESHOLD = 60;
+const DEFAULT_THRESHOLD = 45;
 
 /**
  * How much the horizontal travel must exceed the vertical travel for the
  * gesture to count as a horizontal swipe. Prevents hijacking vertical
  * scrolls: a mostly-downward drag never fires a swipe even if it drifts
- * sideways past the threshold.
+ * sideways past the threshold. Kept close to 1.0 so a real finger — which
+ * almost always drifts vertically while swiping sideways — can still
+ * commit; a genuinely vertical scroll still has |dy| >> |dx| and is
+ * rejected.
  */
-const HORIZONTAL_DOMINANCE = 1.5;
+const HORIZONTAL_DOMINANCE = 1.0;
 
 /**
  * Width (px) of the screen-edge zone from which an *opening* swipe must
- * start. Kept narrow so taps/scrolls in the body of the content area are
- * never intercepted — only a deliberate drag that begins at the very edge
- * opens a panel.
+ * start. Wide enough to register a deliberate edge drag from a fingertip
+ * (or a phone with a case) without intercepting taps in the content body.
  */
-const DEFAULT_EDGE_WIDTH = 28;
+const DEFAULT_EDGE_WIDTH = 36;
 
 export type SwipeDirection = "left" | "right";
 
@@ -139,9 +141,12 @@ export function useSwipeGesture({
       const touch = event.touches[0];
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
-      // Only commit once the gesture is clearly horizontal so we never
-      // steal a vertical scroll.
-      if (Math.abs(dy) * HORIZONTAL_DOMINANCE >= Math.abs(dx)) return;
+      // While the gesture is still dominantly vertical, keep tracking but
+      // don't commit — a swipe that starts with a little vertical drift can
+      // still become horizontal as the finger continues. A genuinely
+      // vertical scroll has |dy| >> |dx| for its whole duration and never
+      // crosses the threshold below, so it never fires.
+      if (Math.abs(dy) * HORIZONTAL_DOMINANCE > Math.abs(dx)) return;
       if (Math.abs(dx) < threshold) return;
       const dir: SwipeDirection = dx < 0 ? "left" : "right";
       if (direction === "left" && dir !== "left") {
