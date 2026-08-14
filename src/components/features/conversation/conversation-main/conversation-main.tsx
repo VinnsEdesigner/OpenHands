@@ -32,6 +32,16 @@ export function ConversationMain() {
   const overviewDrawer = useConversationOverviewDrawerOptional();
   const isSecondaryDrawerOpen = Boolean(overviewDrawer?.section);
 
+  // Preload the right-panel's default tab chunk so opening the panel (via
+  // swipe or the toggle button) doesn't first pay a JS-chunk download before
+  // the tab can render. `files` is the default tab (set in openRightPanel /
+  // ConversationMobilePanelPage), so it's the one almost always needed. This
+  // is a pure cache-warming import — zero effect on data freshness, it just
+  // resolves the React.lazy() boundary ahead of time.
+  React.useEffect(() => {
+    void import("#/routes/files-tab");
+  }, []);
+
   const { leftWidth, rightWidth, isDragging, containerRef, handleMouseDown } =
     useResizablePanels({
       defaultLeftWidth: 50,
