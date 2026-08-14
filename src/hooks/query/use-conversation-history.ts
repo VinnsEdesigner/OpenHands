@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import EventService from "#/api/event-service/event-service.api";
 import { useUserConversation } from "#/hooks/query/use-user-conversation";
+import { retryOnTransient } from "#/utils/react-query-retry";
 import type { OpenHandsEvent } from "#/types/agent-server/core";
 
 /**

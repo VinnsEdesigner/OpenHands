@@ -1,3 +1,4 @@
+import React from "react";
 import { cn } from "#/utils/utils";
 import { ChatInterfaceWrapper } from "./chat-interface-wrapper";
 import { ConversationTabContent } from "../conversation-tabs/conversation-tab-content/conversation-tab-content";
@@ -5,11 +6,15 @@ import { ConversationNameWithStatus } from "../conversation-name-with-status";
 import { ConversationTabs } from "../conversation-tabs/conversation-tabs";
 import { ResizeHandle } from "../../../ui/resize-handle";
 import { useResizablePanels } from "#/hooks/use-resizable-panels";
+import { useSwipeGesture } from "#/hooks/use-swipe-gesture";
 import { useConversationStore } from "#/stores/conversation-store";
 import {
   useBreakpoint,
   SIDEBAR_RAIL_COLLAPSE_MAX_WIDTH,
 } from "#/hooks/use-breakpoint";
+import { useConversationId } from "#/hooks/use-conversation-id";
+import { useIsArchivedConversation } from "#/hooks/use-is-archived-conversation";
+import { useSidebarMobileNav } from "#/components/features/sidebar/sidebar-mobile-nav-context";
 import { SidebarMobileMenuToggle } from "#/components/features/sidebar/sidebar-mobile-menu-toggle";
 import { ConversationOverviewDrawer } from "../conversation-overview-drawer";
 import { useConversationOverviewDrawerOptional } from "../conversation-overview-drawer-context";
@@ -34,6 +39,54 @@ export function ConversationMain() {
       maxLeftWidth: 80,
       storageKey: "desktop-layout-panel-width",
     });
+
+  // Shared open-right-panel routine — mirrors `RightPanelToggle.handleToggle`
+  // so the swipe gesture and the button stay in sync. Selecting a default tab
+  // on first open matches the button's behaviour.
+  const openRightPanel = () => {
+    if (isArchivedConversation) return;
+    setHasRightPanelToggled(true);
+    setIsRightPanelShown(true);
+    const { selectedTab } = useConversationStore.getState();
+    if (!selectedTab) setSelectedTab("files");
+    if (isMobile && conversationId) {
+      navigate(`/conversations/${conversationId}/panel`);
+    }
+  };
+
+  // Swipe right from the left screen edge → open the left sidebar drawer
+  // (mobile only — on desktop the rail is always visible). Only enabled when
+  // the drawer is closed so an open drawer's own swipe-to-close handles the
+  // reverse gesture (see sidebar.tsx).
+  useSwipeGesture({
+    direction: "right",
+    startEdge: "left",
+    onSwipe: () => openSidebar(),
+    enabled: isSidebarRailHidden && !isSidebarOpen,
+  });
+
+  // Swipe left from the right screen edge → open the right panel. On desktop
+  // this slides the side drawer in; on mobile it navigates to the full-screen
+  // /panel route. Only enabled when the panel is closed.
+  useSwipeGesture({
+    direction: "left",
+    startEdge: "right",
+    onSwipe: () => openRightPanel(),
+    enabled: !isRightPanelShown && !isArchivedConversation,
+  });
+
+  // Swipe right on the desktop right panel body → close it. Scoped to the
+  // panel element so a rightward swipe in the chat area is never intercepted.
+  // Mobile close is handled by the /panel route page (swipe right → back).
+  useSwipeGesture({
+    direction: "right",
+    targetRef: desktopPanelRef,
+    onSwipe: () => {
+      setIsRightPanelShown(false);
+      setHasRightPanelToggled(false);
+    },
+    enabled: !isMobile && isRightPanelShown,
+  });
 
   return (
     <div
@@ -108,6 +161,8 @@ export function ConversationMain() {
         {/* Right panel: desktop side drawer. Mobile opens Files/Tools via /panel route. */}
         {!isMobile && (
           <div
+            ref={desktopPanelRef}
+            data-testid="desktop-right-panel"
             className={cn(
               "transition-all duration-300 ease-in-out overflow-hidden",
               getDesktopTabPanelClass(isRightPanelShown),

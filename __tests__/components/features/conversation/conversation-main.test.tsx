@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { MemoryRouter } from "react-router";
 import { SidebarMobileNavProvider } from "#/components/features/sidebar/sidebar-mobile-nav-context";
 
 // Mutable mock state for controlling breakpoint
@@ -28,7 +29,19 @@ vi.mock("#/hooks/use-resizable-panels", () => ({
 vi.mock("#/stores/conversation-store", () => ({
   useConversationStore: () => ({
     isRightPanelShown: mockIsRightPanelShown,
+    setIsRightPanelShown: vi.fn(),
+    setHasRightPanelToggled: vi.fn(),
+    setSelectedTab: vi.fn(),
+    getState: () => ({ selectedTab: null }),
   }),
+}));
+
+vi.mock("#/hooks/use-conversation-id", () => ({
+  useConversationId: () => ({ conversationId: "conv-1" }),
+}));
+
+vi.mock("#/hooks/use-is-archived-conversation", () => ({
+  useIsArchivedConversation: () => false,
 }));
 
 // Mock ChatInterface with useEffect to track mount/unmount lifecycle
@@ -40,7 +53,7 @@ vi.mock("#/components/features/chat/chat-interface", () => {
       React.useEffect(() => {
         return () => chatInterfaceUnmount();
       }, []);
-      return <div data-testid="chat-interface">Chat Interface</div>;
+      return <div data-testid="chat-interface" />;
     },
   };
 });
@@ -75,9 +88,23 @@ import { ConversationMain } from "#/components/features/conversation/conversatio
 
 function renderConversationMain() {
   return render(
-    <SidebarMobileNavProvider>
-      <ConversationMain />
-    </SidebarMobileNavProvider>,
+    <MemoryRouter>
+      <SidebarMobileNavProvider>
+        <ConversationMain />
+      </SidebarMobileNavProvider>
+    </MemoryRouter>,
+  );
+}
+
+// Re-render wrapper used by the breakpoint-crossing tests so the router
+// context is preserved across rerenders.
+function rerenderConversationMain(rerender: (ui: React.ReactElement) => void) {
+  rerender(
+    <MemoryRouter>
+      <SidebarMobileNavProvider>
+        <ConversationMain />
+      </SidebarMobileNavProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -108,11 +135,7 @@ describe("ConversationMain - Layout Transition Stability", () => {
 
     // Cross the breakpoint to mobile
     mockIsMobile = true;
-    rerender(
-      <SidebarMobileNavProvider>
-        <ConversationMain />
-      </SidebarMobileNavProvider>,
-    );
+    rerenderConversationMain(rerender);
 
     // ChatInterface must NOT have been unmounted and remounted
     expect(chatInterfaceUnmount).not.toHaveBeenCalled();
@@ -126,11 +149,7 @@ describe("ConversationMain - Layout Transition Stability", () => {
 
     // Cross the breakpoint to desktop
     mockIsMobile = false;
-    rerender(
-      <SidebarMobileNavProvider>
-        <ConversationMain />
-      </SidebarMobileNavProvider>,
-    );
+    rerenderConversationMain(rerender);
 
     // ChatInterface must NOT have been unmounted and remounted
     expect(chatInterfaceUnmount).not.toHaveBeenCalled();
@@ -144,11 +163,7 @@ describe("ConversationMain - Layout Transition Stability", () => {
     // Simulate rapid resize back and forth across the breakpoint
     for (const mobile of [true, false, true, false, true]) {
       mockIsMobile = mobile;
-      rerender(
-        <SidebarMobileNavProvider>
-          <ConversationMain />
-        </SidebarMobileNavProvider>,
-      );
+      rerenderConversationMain(rerender);
     }
 
     expect(chatInterfaceUnmount).not.toHaveBeenCalled();

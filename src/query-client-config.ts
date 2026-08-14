@@ -51,13 +51,20 @@ export const createAgentServerQueryClient = () => {
         if (!disableToast && !isActiveCloudBackendAuthError(error)) {
           const errorMessage = retrieveAxiosErrorMessage(error);
 
+          // Dedup by message so a persistently-failing background query (e.g.
+          // a conversation-open burst that the relay rate-limits) doesn't
+          // re-toast on every retry/refetch. The previous 3s window was shorter
+          // than a single retry-with-backoff cycle, so a recurring transient
+          // failure re-toasted constantly. 30s is long enough to cover a full
+          // retry sequence yet short enough that a genuinely new error (a
+          // different message) still surfaces promptly.
           if (!shownErrors.has(errorMessage || "")) {
             displayErrorToast(errorMessage || i18n.t(I18nKey.ERROR$GENERIC));
             shownErrors.add(errorMessage || "");
 
             setTimeout(() => {
               shownErrors.delete(errorMessage || "");
-            }, 3000);
+            }, 30000);
           }
         }
       },

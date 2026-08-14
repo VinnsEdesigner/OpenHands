@@ -140,6 +140,15 @@ export const useLoadOlderEvents = (
         );
       }
 
+      // Snapshot the store length BEFORE merging so we can tell whether the
+      // returned page actually added anything. A degraded upstream (e.g. the
+      // cloud #14399 retry that drops `timestamp__lt` and re-returns the
+      // newest page) hands back events we already have; `addEvents` dedups
+      // them all away, but `next_page_id` may still be present, so the
+      // `exhausted` check below would otherwise keep `hasMore=true` and the
+      // "load older" UI would re-fire forever on a page that adds nothing.
+      const beforeLen = useEventStore.getState().events.length;
+
       const older = [...page.items].reverse();
       if (older.length > 0) {
         addEvents(older);
@@ -151,11 +160,20 @@ export const useLoadOlderEvents = (
           useEventStore.getState().uiEvents,
         );
       }
+
+      const afterLen = useEventStore.getState().events.length;
+      const addedNothing = afterLen <= beforeLen;
       // Stop once the server signals there are no more pages, OR — for
       // servers that don't fill in `next_page_id` for filtered queries —
-      // when we get back a short page.
+      // when we get back a short page, OR when the page was all duplicates
+      // (nothing new prepended). The duplicate case is the #14399 degraded
+      // path: the retry returns the newest page again, which we already
+      // hold, so continuing to paginate would loop forever on identical
+      // results. Treat "no new events" as exhaustion.
       const exhausted =
-        !page.next_page_id || page.items.length < INITIAL_HISTORY_PAGE_SIZE;
+        !page.next_page_id ||
+        page.items.length < INITIAL_HISTORY_PAGE_SIZE ||
+        addedNothing;
       if (exhausted) {
         hasMoreRef.current = false;
         setHasMore(false);

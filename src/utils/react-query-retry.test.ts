@@ -76,8 +76,25 @@ describe("retryOnTransient", () => {
     expect(retryOnTransient(0, axiosError(400))).toBe(false);
   });
 
-  it("retries non-HTTP/network errors a few times but not forever", () => {
-    const err = new Error("network drop");
+  it("does not retry non-HTTP errors that are plain thrown Errors (validation fails fast)", () => {
+    // A queryFn that throws a plain `Error` (e.g. a malformed-response
+    // validation error) must surface immediately — retrying it for seconds
+    // would just delay a deterministic failure. The relay
+    // (scripts/relay/cloud-proxy-relay.mjs) owns cloud-path network
+    // resilience (it retries ECONNRESET/ETIMEDOUT/5xx/429 at the proxy), so
+    // a plain no-status Error reaching the query is not a network blip to
+    // paper over.
+    const err = new Error("Invalid conversation history response");
+    expect(retryOnTransient(0, err)).toBe(false);
+    expect(retryOnTransient(1, err)).toBe(false);
+  });
+
+  it("retries a genuine network drop (axios error with NO response) a few times but not forever", () => {
+    // Local-runtime calls use axios; a dropped connection surfaces as an
+    // AxiosError with no `response` (the request never reached the server).
+    // There's no relay to absorb it in local mode, so the query retries a
+    // handful of times as the second line of defense.
+    const err = new AxiosError("network drop", "ERR_NETWORK");
     expect(retryOnTransient(0, err)).toBe(true);
     expect(retryOnTransient(2, err)).toBe(true);
     expect(retryOnTransient(3, err)).toBe(false);

@@ -258,6 +258,48 @@ describe("useLoadOlderEvents", () => {
     expect(result.current.hasMore).toBe(true);
   });
 
+  it("stops paginating when a full page is all duplicates (the #14399 newest-page retry)", async () => {
+    // The cloud #14399 retry drops `timestamp__lt` and returns the newest page
+    // again — events the store already holds. `addEvents` dedups them all
+    // away (nothing added), but `next_page_id` may be present, so without
+    // duplicate detection `hasMore` stays true and the "load older" UI loops
+    // forever on a page that adds nothing. The hook treats "nothing new was
+    // prepended" as exhaustion so the spinner stops.
+    act(() => {
+      useEventStore
+        .getState()
+        .addEvent(makeEvent("evt-recent", "2024-06-01T00:00:00Z"));
+    });
+
+    // Seed a full page of events so the store is non-empty, then return the
+    // SAME page (all dupes) with a live next_page_id.
+    const dupPage: OpenHandsEvent[] = Array.from(
+      { length: INITIAL_HISTORY_PAGE_SIZE },
+      (_, i) =>
+        makeEvent(`evt-dup-${i}`, new Date(2024, 5, 1 - i).toISOString()),
+    );
+    act(() => {
+      useEventStore.getState().addEvents(dupPage);
+    });
+
+    vi.spyOn(EventService, "searchEvents").mockResolvedValue(
+      makePage(dupPage, "next-page"),
+    );
+
+    const { result } = renderHook(() => useLoadOlderEvents("conv-1"), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    // The page added nothing (all dupes) → treat as exhausted.
+    await waitFor(() => {
+      expect(result.current.hasMore).toBe(false);
+    });
+  });
+
   it("coalesces repeated loadOlder calls while a page request is already in flight", async () => {
     act(() => {
       useEventStore
@@ -291,7 +333,9 @@ describe("useLoadOlderEvents", () => {
     expect(result.current.isLoading).toBe(true);
 
     await act(async () => {
-      resolvePage(makePage([makeEvent("evt-older", "2024-05-01T00:00:00Z")], null));
+      resolvePage(
+        makePage([makeEvent("evt-older", "2024-05-01T00:00:00Z")], null),
+      );
       await Promise.all([firstLoad, secondLoad]);
     });
 

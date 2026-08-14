@@ -979,6 +979,14 @@ export function ConversationWebSocketProvider({
     // sees new activity immediately instead of waiting for a full replay. Any
     // gap between the REST fetch and the WS handshake is sub-second and
     // self-corrects via the store's dedup on the next `since` window.
+    //
+    // REST is the resilient source of truth for history: the history query
+    // retries transient failures (see `useConversationHistory`'s
+    // `retryOnTransient`), and the relay's hardened `fetchWithRetry` retries
+    // network drops / 429 / 5xx at the proxy layer (see
+    // `scripts/relay/cloud-proxy-relay.mjs`). So a blank-conversation state is
+    // not "recovered by a WS replay" — it's prevented by REST actually
+    // succeeding. The WS stays a live-only transport.
     const queryParams: Record<string, string | boolean> = initialAfterTimestamp
       ? { resend_mode: "since", after_timestamp: initialAfterTimestamp }
       : {};

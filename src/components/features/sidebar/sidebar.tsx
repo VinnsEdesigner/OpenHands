@@ -11,6 +11,7 @@ import { cn } from "#/utils/utils";
 import { useSidebarMobileNav } from "./sidebar-mobile-nav-context";
 import { useSidebarStore } from "#/stores/sidebar-store";
 import { useClickOutsideElement } from "#/hooks/use-click-outside-element";
+import { useSwipeGesture } from "#/hooks/use-swipe-gesture";
 import { useBackendsHealth } from "#/hooks/query/use-backends-health";
 // The LLM settings modal is only mounted when the settings query 404s and
 // LLM settings aren't hidden — keep it out of the sidebar's eager graph.
@@ -68,6 +69,10 @@ export function Sidebar() {
   const [, refreshCollapsedExpandGate] = React.useReducer((n) => n + 1, 0);
   const { isOpen: isMobileNavOpen, close: closeMobileNav } =
     useSidebarMobileNav();
+  // Ref for the mobile drawer so a swipe-left-to-close can be scoped to the
+  // drawer (a leftward swipe elsewhere — e.g. scrolling the conversation —
+  // must not dismiss the sidebar).
+  const mobileDrawerRef = React.useRef<HTMLElement | null>(null);
   const [mobileDrawerMounted, setMobileDrawerMounted] = React.useState(false);
   const [mobileDrawerVisible, setMobileDrawerVisible] = React.useState(false);
   const collapsedBackendPopoverRef = useClickOutsideElement<HTMLDivElement>(
@@ -109,6 +114,16 @@ export function Sidebar() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isMobileNavOpen, closeMobileNav]);
+
+  // Swipe left on the drawer body → close it (mirrors the overlay click and
+  // Escape handlers above). Scoped to the drawer element so swipes on the
+  // conversation behind it aren't intercepted.
+  useSwipeGesture({
+    direction: "left",
+    targetRef: mobileDrawerRef,
+    onSwipe: () => closeMobileNav(),
+    enabled: isMobileNavOpen,
+  });
 
   React.useEffect(() => {
     if (currentPath === "/settings") {
@@ -246,6 +261,7 @@ export function Sidebar() {
             aria-hidden={!mobileDrawerVisible}
           />
           <aside
+            ref={mobileDrawerRef}
             aria-label={t(I18nKey.SIDEBAR$NAVIGATION_LABEL)}
             data-testid="sidebar-mobile-drawer"
             aria-hidden={!mobileDrawerVisible}

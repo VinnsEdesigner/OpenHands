@@ -172,9 +172,18 @@ class EventService {
         // #14399's 500 is a str-vs-datetime comparison that only affects
         // timestamp__gte/__lt, not sort_order or page_id. Keeping sort_order
         // preserves DESC ordering (so the caller's reverse-to-chronological
-        // stays correct) while avoiding the broken filter. Only if the
-        // retry also fails (or there were no timestamp filters to drop) do
-        // we degrade to an empty page so pagination stops instead of looping.
+        // stays correct) while avoiding the broken filter.
+        //
+        // IMPORTANT: the retry drops `timestamp__lt`, so it can only return
+        // the *most recent* page — the same ids the store already holds when
+        // paginating older events. Returning that page WITH a live
+        // `next_page_id` makes the caller think there's more to load, but the
+        // next page is identical (dupes), so `addEvents` no-ops, `hasMore`
+        // stays true, and the "load older" UI re-fires forever (a stuck
+        // spinner). We therefore return the retried items but force
+        // `next_page_id: null` so pagination STOPS after this degradation —
+        // the caller treats it as "no more older events" rather than looping
+        // on duplicate newest-page results.
         if (hasTimestampFilters) {
           const retriedParams = new URLSearchParams();
           retriedParams.set("limit", String(cloudLimit));
@@ -185,7 +194,9 @@ class EventService {
             const data = await doCloudSearch(retriedParams);
             return {
               items: data?.items ?? [],
-              next_page_id: data?.next_page_id ?? null,
+              // Force pagination to stop: the timestamp anchor is gone, so
+              // any next_page_id would re-fetch the newest page again (dupes).
+              next_page_id: null,
             };
           } catch (retryErr) {
             // Still transient after dropping timestamp filters — propagate

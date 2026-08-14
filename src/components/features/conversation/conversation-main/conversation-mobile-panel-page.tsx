@@ -7,6 +7,7 @@ import {
   mobileTopBarIconClassName,
 } from "#/utils/mobile-top-bar-icon-button-classes";
 import { useConversationStore } from "#/stores/conversation-store";
+import { useSwipeGesture } from "#/hooks/use-swipe-gesture";
 import { ConversationTabContent } from "../conversation-tabs/conversation-tab-content/conversation-tab-content";
 import { ConversationTabs } from "../conversation-tabs/conversation-tabs";
 
@@ -18,6 +19,9 @@ export function ConversationMobilePanelPage({
   const { t } = useTranslation("openhands");
   const { setIsRightPanelShown, setHasRightPanelToggled, setSelectedTab } =
     useConversationStore();
+
+  // Ref for the panel page so a swipe-right-to-go-back is scoped to it.
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
     setIsRightPanelShown(true);
@@ -32,12 +36,24 @@ export function ConversationMobilePanelPage({
     };
   }, [setIsRightPanelShown, setHasRightPanelToggled, setSelectedTab]);
 
+  // Swipe right on the mobile panel page → go back to the conversation
+  // (mirrors the back chevron button). Scoped to the panel so swipes on the
+  // conversation view aren't intercepted.
+  useSwipeGesture({
+    direction: "right",
+    targetRef: panelRef,
+    onSwipe: () => onNavigateBack(),
+  });
+
   const handleBack = () => {
     onNavigateBack();
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--oh-surface)]">
+    <div
+      ref={panelRef}
+      className="flex h-full min-h-0 flex-col bg-[var(--oh-surface)]"
+    >
       <div
         data-testid="conversation-mobile-panel-top"
         className="flex h-10 min-h-10 shrink-0 items-center gap-1.5 border-b border-[var(--oh-border)] pl-2.5"

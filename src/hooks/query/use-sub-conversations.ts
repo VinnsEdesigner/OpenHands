@@ -42,5 +42,9 @@ export const useSubConversations = (
     staleTime: FIVE_MINUTES,
     gcTime: FIFTEEN_MINUTES,
     retry: false,
+    // Background metadata for the planning sub-conversation; suppress the
+    // spurious "Disconnected" toast on transient relay blips (see
+    // use-user-conversation.ts for the same rationale).
+    meta: { disableToast: true },
   });
 };

@@ -114,6 +114,36 @@ describe("EventService.searchEvents — cloud branch", () => {
     warnSpy.mockRestore();
   });
 
+  it("forces next_page_id=null on a successful timestamp-filter retry (stops the pagination loop)", async () => {
+    // The #14399 retry drops `timestamp__lt`, so it can only return the newest
+    // page — the same ids the store already holds. Returning that page WITH a
+    // live `next_page_id` would make the "load older" UI re-fetch the same
+    // newest page forever (dupes, nothing added, hasMore stays true). The fix
+    // forces `next_page_id: null` so pagination stops after the degradation.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    vi.mocked(callCloudProxy)
+      .mockRejectedValueOnce(new Error("Internal Server Error"))
+      .mockResolvedValueOnce({
+        items: [{ id: "evt-1" }, { id: "evt-2" }],
+        next_page_id: "would-loop-forever",
+      });
+
+    const result = await EventService.searchEvents("conv-1", null, null, {
+      limit: 50,
+      sortOrder: "TIMESTAMP_DESC",
+      timestampLt: "2026-05-12T00:00:00.000000",
+    });
+
+    expect(vi.mocked(callCloudProxy)).toHaveBeenCalledTimes(2);
+    // Items are returned (the retry succeeded), but pagination is terminated.
+    expect(result.items).toHaveLength(2);
+    expect(result.next_page_id).toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
   it("degrades to empty page when both full-param and timestamp-filter-retry fail", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 

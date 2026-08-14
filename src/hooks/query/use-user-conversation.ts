@@ -62,5 +62,12 @@ export const useUserConversation = (
     refetchInterval,
     staleTime: FIVE_MINUTES,
     gcTime: FIFTEEN_MINUTES,
+    // Suppress the global "Disconnected (check URL or network)" toast. This
+    // query runs on every conversation open and fast-polls every 3s while the
+    // sandbox is provisioning/paused; a momentary network blip on the relay
+    // would otherwise re-toast repeatedly. The route surfaces a genuine
+    // "conversation not available" error itself (it checks `isFetched` and
+    // navigates), so the generic connection toast here is pure noise.
+    meta: { disableToast: true },
   });
 };
