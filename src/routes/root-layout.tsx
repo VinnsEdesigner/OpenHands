@@ -24,7 +24,7 @@ import { useAppTitle } from "#/hooks/use-app-title";
 import { ReactRouterNavigationProvider } from "./react-router-navigation-provider";
 import { OnboardingHost } from "#/components/features/onboarding";
 import { isOnboardingPreviewActive } from "#/components/features/onboarding/onboarding-preview";
-import { CanvasExtensionsRuntimeProvider } from "#/components/features/canvas-extensions/canvas-extensions-runtime";
+import { SwipeDebugOverlay } from "#/components/shared/swipe-debug-overlay";
 
 const EnvironmentSwitchOverlay = React.lazy(
   () => import("#/components/features/backends/environment-switch-overlay"),
@@ -144,13 +144,14 @@ export default function MainApp() {
               </div>
             </div>
           </div>
-          <React.Suspense fallback={null}>
-            <EnvironmentSwitchOverlay />
-            <CommandMenu />
-          </React.Suspense>
-          {showOnboardingPreview ? <OnboardingHost /> : null}
-        </SidebarMobileNavProvider>
-      </CanvasExtensionsRuntimeProvider>
+        </div>
+        <React.Suspense fallback={null}>
+          <EnvironmentSwitchOverlay />
+          <CommandMenu />
+        </React.Suspense>
+        {showOnboardingPreview ? <OnboardingHost /> : null}
+        <SwipeDebugOverlay />
+      </SidebarMobileNavProvider>
     </ReactRouterNavigationProvider>
   );
 }
