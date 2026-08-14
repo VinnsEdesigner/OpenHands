@@ -54,6 +54,17 @@ export interface UseSwipeGestureOptions {
   threshold?: number;
   /** Called with the committed swipe direction. */
   onSwipe: (direction: SwipeDirection) => void;
+  /**
+   * Called once when the gesture's axis is locked to "horizontal" (the first
+   * move whose travel exceeds the axis-lock slop and is horizontal-dominant)
+   * — i.e. the moment a swipe is *recognized*, ~150–400ms before it reaches
+   * the commit threshold. Use this to prefetch the destination route's data
+   * / chunks so the target page is ready by the time `onSwipe` fires, hiding
+   * the network round-trip behind the swipe's own duration. Not called for
+   * vertical (scroll) gestures or if the gesture never locks. Fires at most
+   * once per gesture.
+   */
+  onAxisLock?: () => void;
   /** When false, the hook attaches no listeners. Defaults to true. */
   enabled?: boolean;
   /**
@@ -109,16 +120,21 @@ export function useSwipeGesture({
   edgeWidth = DEFAULT_EDGE_WIDTH,
   threshold = DEFAULT_THRESHOLD,
   onSwipe,
+  onAxisLock,
   enabled = true,
   targetRef,
 }: UseSwipeGestureOptions): void {
-  // Keep the latest callback in a ref so the effect does not re-bind
-  // listeners on every render (and does not go stale if the parent
-  // recreates the callback).
+  // Keep the latest callbacks in refs so the effect does not re-bind
+  // listeners on every render (and do not go stale if the parent recreates
+  // the callbacks).
   const onSwipeRef = useRef(onSwipe);
   useEffect(() => {
     onSwipeRef.current = onSwipe;
   }, [onSwipe]);
+  const onAxisLockRef = useRef(onAxisLock);
+  useEffect(() => {
+    onAxisLockRef.current = onAxisLock;
+  }, [onAxisLock]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -212,6 +228,10 @@ export function useSwipeGesture({
         if (adx >= ady) {
           axis = "horizontal";
           if (event.cancelable) event.preventDefault();
+          // Fire onAxisLock once: a horizontal swipe is now recognized (before
+          // the commit threshold), giving callers a head start to prefetch the
+          // destination's data/chunks behind the rest of the swipe.
+          onAxisLockRef.current?.();
         } else {
           // Dominantly vertical from the start → it's a scroll, not a swipe.
           // Don't preventDefault (let the browser pan) and stop tracking.

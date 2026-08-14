@@ -81,6 +81,7 @@ export function ConversationMain() {
   useSwipeGesture({
     direction: "left",
     startEdge: "right",
+    onAxisLock: prefetchRightPanel,
     onSwipe: () => openRightPanel(),
     enabled: !isRightPanelShown && !isArchivedConversation,
   });

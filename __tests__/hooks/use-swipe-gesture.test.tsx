@@ -86,6 +86,53 @@ describe("useSwipeGesture", () => {
     expect(onSwipe).toHaveBeenCalledWith("right");
   });
 
+  it("fires onAxisLock once when the gesture is recognized (before commit)", () => {
+    const onSwipe = vi.fn();
+    const onAxisLock = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        startEdge: "left",
+        onAxisLock,
+        onSwipe,
+      }),
+    );
+
+    // Start near the left edge.
+    dispatchPointer(document, "pointerdown", 10, 100);
+    // First move past the axis-lock slop (8px) but below the commit
+    // threshold (45px) → axis locks horizontal, onAxisLock fires.
+    dispatchPointer(document, "pointermove", 25, 100);
+    expect(onAxisLock).toHaveBeenCalledTimes(1);
+    expect(onSwipe).not.toHaveBeenCalled();
+    // Continue past the threshold → onSwipe fires, onAxisLock does NOT fire
+    // again (once per gesture).
+    dispatchPointer(document, "pointermove", 90, 100);
+    dispatchPointer(document, "pointerup", 90, 100);
+    expect(onAxisLock).toHaveBeenCalledTimes(1);
+    expect(onSwipe).toHaveBeenCalledWith("right");
+  });
+
+  it("does not fire onAxisLock for a vertical (scroll) gesture", () => {
+    const onAxisLock = vi.fn();
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        onAxisLock,
+        onSwipe,
+      }),
+    );
+
+    // Dominantly vertical movement → axis locks vertical → no onAxisLock.
+    dispatchPointer(document, "pointerdown", 100, 10);
+    dispatchPointer(document, "pointermove", 100, 40);
+    dispatchPointer(document, "pointerup", 100, 40);
+
+    expect(onAxisLock).not.toHaveBeenCalled();
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
+
   it("does not fire (mouse) when a non-touch pointer starts outside the edge zone", () => {
     const onSwipe = vi.fn();
     renderHook(() =>

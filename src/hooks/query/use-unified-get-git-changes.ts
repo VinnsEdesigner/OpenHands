@@ -1,5 +1,5 @@
 import React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import AgentServerGitService from "#/api/git-service/agent-server-git-service.api";
 import { useConversationId } from "#/hooks/use-conversation-id";
 import { useActiveConversation } from "#/hooks/query/use-active-conversation";
@@ -7,6 +7,56 @@ import { useRuntimeIsReady } from "#/hooks/use-runtime-is-ready";
 import { getGitPath } from "#/utils/get-git-path";
 import { retryOnTransient } from "#/utils/react-query-retry";
 import type { GitChange } from "#/api/open-hands.types";
+
+/**
+ * Prefetch the git-changes query for the active conversation into the React
+ * Query cache, using the exact query key `useUnifiedGetGitChanges` reads, so
+ * the Files tab renders instantly when the right panel opens (cache hit, no
+ * refetch). Safe to call speculatively (e.g. the moment a swipe is
+ * recognized): if the data is already fresh it's a no-op, and an in-flight
+ * request is de-duped by React Query. Returns immediately if the runtime
+ * isn't ready or there's no conversation.
+ */
+export function prefetchGitChanges(
+  queryClient: QueryClient,
+  conversationId: string | null | undefined,
+  conversation:
+    | {
+        conversation_url?: string | null;
+        session_api_key?: string | null;
+        selected_repository?: string | null;
+        workspace?: { working_dir?: string | null } | null;
+      }
+    | null
+    | undefined,
+): void {
+  if (!conversationId) return;
+  const gitPath = getGitPath(
+    conversation?.selected_repository,
+    conversation?.workspace?.working_dir?.trim(),
+  );
+  queryClient.prefetchQuery({
+    queryKey: [
+      "file_changes",
+      conversationId,
+      conversation?.conversation_url,
+      conversation?.session_api_key,
+      gitPath,
+    ],
+    queryFn: async () => {
+      if (!conversationId) throw new Error("No conversation ID");
+      return AgentServerGitService.getGitChanges(
+        conversationId,
+        conversation?.conversation_url,
+        conversation?.session_api_key,
+        gitPath,
+      );
+    },
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 15,
+    meta: { disableToast: true },
+  });
+}
 
 export const useUnifiedGetGitChanges = () => {
   const { conversationId } = useConversationId();
@@ -46,7 +96,7 @@ export const useUnifiedGetGitChanges = () => {
     retry: retryOnTransient,
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 15, // 15 minutes
-    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
     enabled: runtimeIsReady && !!conversationId,
     meta: {
       disableToast: true,
