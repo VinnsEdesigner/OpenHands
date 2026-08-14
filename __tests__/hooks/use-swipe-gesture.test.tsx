@@ -3,44 +3,32 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useSwipeGesture } from "#/hooks/use-swipe-gesture";
 
 /**
- * Minimal touch-like object the hook actually reads: clientX, clientY, and
- * (for scoped gestures) the `target` node. jsdom does not define `Touch`, so
- * we cast a plain object rather than constructing one.
+ * Dispatch a PointerEvent on the given target. The hook is built on Pointer
+ * Events (pointerdown/move/up/cancel) which fire uniformly for mouse, touch,
+ * and pen — so the tests use `pointerType: "touch"` to model a finger and
+ * `pointerType: "mouse"` to model a desktop drag. jsdom supports
+ * `PointerEvent`. `setPointerCapture`/`releasePointerCapture` are stubbed
+ * on Element.prototype so the capture path doesn't throw.
  */
-interface FakeTouch {
-  clientX: number;
-  clientY: number;
-  target: EventTarget | null;
-}
-
-const makeTouch = (
-  clientX: number,
-  clientY: number,
-  target: EventTarget | null,
-): FakeTouch => ({ clientX, clientY, target });
-
-/**
- * Dispatch a TouchEvent on the given target. jsdom supports `TouchEvent` but
- * not the `Touch` constructor, so we pass plain touch-like objects.
- */
-function dispatchTouch(
+function dispatchPointer(
   target: Document | HTMLElement,
-  type: "touchstart" | "touchmove" | "touchend",
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
   clientX: number,
   clientY: number,
+  pointerId = 1,
+  pointerType: "touch" | "mouse" = "touch",
 ): void {
   const eventTarget = target === document ? document.body : (target as Node);
-  const touch = makeTouch(clientX, clientY, eventTarget);
-  const event = new TouchEvent(type, {
-    touches: type === "touchend" ? [] : [touch as unknown as Touch],
-    changedTouches: [touch as unknown as Touch],
+  const event = new PointerEvent(type, {
+    pointerId,
+    pointerType,
+    clientX,
+    clientY,
     cancelable: true,
     bubbles: true,
   });
-  // Set the event's target so the hook's `event.target` / `target.contains`
-  // check sees the right node. jsdom's TouchEvent reuses the dispatched
-  // target automatically via dispatchEvent, but we set it explicitly for
-  // document-dispatched events where the body is the intended target.
+  // jsdom doesn't set `target` for document-dispatched events the way real
+  // browsers do; set it explicitly so the hook's scope check sees the body.
   Object.defineProperty(event, "target", {
     value: eventTarget,
     configurable: true,
@@ -50,6 +38,8 @@ function dispatchTouch(
 
 describe("useSwipeGesture", () => {
   let originalInnerWidth: number;
+  let originalSetPointerCapture: typeof Element.prototype.setPointerCapture;
+  let originalReleasePointerCapture: typeof Element.prototype.releasePointerCapture;
 
   beforeEach(() => {
     originalInnerWidth = window.innerWidth;
@@ -59,6 +49,12 @@ describe("useSwipeGesture", () => {
       configurable: true,
       value: 1024,
     });
+    // jsdom doesn't implement pointer capture; stub them as no-ops so the
+    // hook's capture/release calls don't throw during tests.
+    originalSetPointerCapture = Element.prototype.setPointerCapture;
+    originalReleasePointerCapture = Element.prototype.releasePointerCapture;
+    Element.prototype.setPointerCapture = function setPointerCapture() {};
+    Element.prototype.releasePointerCapture = function releasePointerCapture() {};
   });
 
   afterEach(() => {
@@ -67,6 +63,8 @@ describe("useSwipeGesture", () => {
       configurable: true,
       value: originalInnerWidth,
     });
+    Element.prototype.setPointerCapture = originalSetPointerCapture;
+    Element.prototype.releasePointerCapture = originalReleasePointerCapture;
   });
 
   it("fires onSwipe('right') for a committed rightward swipe from the left edge", () => {
@@ -79,11 +77,11 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    // Start near the left edge (within the default 28px zone).
-    dispatchTouch(document, "touchstart", 10, 100);
+    // Start near the left edge (within the default 36px zone).
+    dispatchPointer(document, "pointerdown", 10, 100);
     // Move rightward past the threshold.
-    dispatchTouch(document, "touchmove", 90, 100);
-    dispatchTouch(document, "touchend", 90, 100);
+    dispatchPointer(document, "pointermove", 90, 100);
+    dispatchPointer(document, "pointerup", 90, 100);
 
     expect(onSwipe).toHaveBeenCalledWith("right");
   });
@@ -99,9 +97,9 @@ describe("useSwipeGesture", () => {
     );
 
     // Start in the middle of the screen — outside the left edge zone.
-    dispatchTouch(document, "touchstart", 500, 100);
-    dispatchTouch(document, "touchmove", 700, 100);
-    dispatchTouch(document, "touchend", 700, 100);
+    dispatchPointer(document, "pointerdown", 500, 100);
+    dispatchPointer(document, "pointermove", 700, 100);
+    dispatchPointer(document, "pointerup", 700, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -116,10 +114,10 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    // innerWidth=1024; right edge zone is the rightmost 28px, so start at 1020.
-    dispatchTouch(document, "touchstart", 1020, 100);
-    dispatchTouch(document, "touchmove", 900, 100);
-    dispatchTouch(document, "touchend", 900, 100);
+    // innerWidth=1024; right edge zone is the rightmost 36px, so start at 1020.
+    dispatchPointer(document, "pointerdown", 1020, 100);
+    dispatchPointer(document, "pointermove", 900, 100);
+    dispatchPointer(document, "pointerup", 900, 100);
 
     expect(onSwipe).toHaveBeenCalledWith("left");
   });
@@ -134,9 +132,9 @@ describe("useSwipeGesture", () => {
     );
 
     // Move downward far more than sideways — a vertical scroll, not a swipe.
-    dispatchTouch(document, "touchstart", 100, 100);
-    dispatchTouch(document, "touchmove", 110, 400);
-    dispatchTouch(document, "touchend", 110, 400);
+    dispatchPointer(document, "pointerdown", 100, 100);
+    dispatchPointer(document, "pointermove", 110, 400);
+    dispatchPointer(document, "pointerup", 110, 400);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -150,10 +148,10 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    dispatchTouch(document, "touchstart", 100, 100);
-    // Only 30px rightward — under the default 60px threshold.
-    dispatchTouch(document, "touchmove", 130, 100);
-    dispatchTouch(document, "touchend", 130, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
+    // Only 30px rightward — under the default 45px threshold.
+    dispatchPointer(document, "pointermove", 130, 100);
+    dispatchPointer(document, "pointerup", 130, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -168,9 +166,9 @@ describe("useSwipeGesture", () => {
     );
 
     // A rightward swipe should not fire when direction="left".
-    dispatchTouch(document, "touchstart", 100, 100);
-    dispatchTouch(document, "touchmove", 200, 100);
-    dispatchTouch(document, "touchend", 200, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
+    dispatchPointer(document, "pointermove", 200, 100);
+    dispatchPointer(document, "pointerup", 200, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -186,9 +184,9 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    dispatchTouch(document, "touchstart", 10, 100);
-    dispatchTouch(document, "touchmove", 90, 100);
-    dispatchTouch(document, "touchend", 90, 100);
+    dispatchPointer(document, "pointerdown", 10, 100);
+    dispatchPointer(document, "pointermove", 90, 100);
+    dispatchPointer(document, "pointerup", 90, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -207,44 +205,65 @@ describe("useSwipeGesture", () => {
     );
 
     // Touch starting on the document body (outside the panel) — ignored.
-    dispatchTouch(document, "touchstart", 100, 100);
-    dispatchTouch(document, "touchmove", 200, 100);
-    dispatchTouch(document, "touchend", 200, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
+    dispatchPointer(document, "pointermove", 200, 100);
+    dispatchPointer(document, "pointerup", 200, 100);
     expect(onSwipe).not.toHaveBeenCalled();
 
-    // Touch starting inside the panel — fires.
+    // Touch starting inside the panel — fires (pointerType defaults to touch,
+    // which close gestures accept).
     const touchTarget = document.createElement("div");
     panel.appendChild(touchTarget);
-    const touch = makeTouch(100, 100, touchTarget);
-    panel.dispatchEvent(
-      new TouchEvent("touchstart", {
-        touches: [touch as unknown as Touch],
-        changedTouches: [touch as unknown as Touch],
-        cancelable: true,
-        bubbles: true,
-      }),
-    );
-    const moveTouch = makeTouch(200, 100, touchTarget);
-    panel.dispatchEvent(
-      new TouchEvent("touchmove", {
-        touches: [moveTouch as unknown as Touch],
-        changedTouches: [moveTouch as unknown as Touch],
-        cancelable: true,
-        bubbles: true,
-      }),
-    );
-    panel.dispatchEvent(
-      new TouchEvent("touchend", {
-        touches: [],
-        changedTouches: [moveTouch as unknown as Touch],
-        cancelable: true,
-        bubbles: true,
-      }),
-    );
+    dispatchPointer(panel, "pointerdown", 100, 100);
+    dispatchPointer(panel, "pointermove", 200, 100);
+    dispatchPointer(panel, "pointerup", 200, 100);
 
     expect(onSwipe).toHaveBeenCalledWith("right");
 
     document.body.removeChild(panel);
+  });
+
+  it("excludes mouse pointers from scoped (close) gestures", () => {
+    // A mouse drag inside a panel must not hijack the gesture (desktop text
+    // selection / clicks stay native). Only touch/pen close.
+    const onSwipe = vi.fn();
+    const panel = document.createElement("div");
+    document.body.appendChild(panel);
+
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        targetRef: { current: panel },
+        onSwipe,
+      }),
+    );
+
+    dispatchPointer(panel, "pointerdown", 100, 100, 1, "mouse");
+    dispatchPointer(panel, "pointermove", 200, 100, 1, "mouse");
+    dispatchPointer(panel, "pointerup", 200, 100, 1, "mouse");
+
+    expect(onSwipe).not.toHaveBeenCalled();
+
+    document.body.removeChild(panel);
+  });
+
+  it("accepts mouse pointers on document-level (open) gestures", () => {
+    // Open gestures accept all pointer types so a desktop trackpad/mouse drag
+    // from a screen edge opens the panel too.
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        startEdge: "left",
+        onSwipe,
+      }),
+    );
+
+    dispatchPointer(document, "pointerdown", 10, 100, 1, "mouse");
+    dispatchPointer(document, "pointermove", 90, 100, 1, "mouse");
+    dispatchPointer(document, "pointerup", 90, 100, 1, "mouse");
+
+    expect(onSwipe).toHaveBeenCalledWith("right");
   });
 
   it("cleans up listeners on unmount (no fire after unmount)", () => {
@@ -259,9 +278,9 @@ describe("useSwipeGesture", () => {
 
     unmount();
 
-    dispatchTouch(document, "touchstart", 10, 100);
-    dispatchTouch(document, "touchmove", 90, 100);
-    dispatchTouch(document, "touchend", 90, 100);
+    dispatchPointer(document, "pointerdown", 10, 100);
+    dispatchPointer(document, "pointermove", 90, 100);
+    dispatchPointer(document, "pointerup", 90, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -275,11 +294,11 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    dispatchTouch(document, "touchstart", 100, 100);
-    dispatchTouch(document, "touchmove", 200, 100); // commits
-    dispatchTouch(document, "touchmove", 300, 100); // already committed
-    dispatchTouch(document, "touchmove", 400, 100); // already committed
-    dispatchTouch(document, "touchend", 400, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
+    dispatchPointer(document, "pointermove", 200, 100); // commits
+    dispatchPointer(document, "pointermove", 300, 100); // already committed
+    dispatchPointer(document, "pointermove", 400, 100); // already committed
+    dispatchPointer(document, "pointerup", 400, 100);
 
     expect(onSwipe).toHaveBeenCalledTimes(1);
   });
@@ -294,11 +313,12 @@ describe("useSwipeGesture", () => {
     );
 
     // Start, drift down a bit, then go mostly horizontal past the threshold.
-    // With HORIZONTAL_DOMINANCE = 1.0 this still commits once |dx| > |dy|.
-    dispatchTouch(document, "touchstart", 100, 100);
-    dispatchTouch(document, "touchmove", 150, 145); // 50px x, 45px y — not yet
-    dispatchTouch(document, "touchmove", 170, 155); // 70px x, 55px y — commits
-    dispatchTouch(document, "touchend", 170, 155);
+    // Once |dx| > |dy| and past slop the axis locks horizontal and commits
+    // when |dx| exceeds the threshold.
+    dispatchPointer(document, "pointerdown", 100, 100);
+    dispatchPointer(document, "pointermove", 150, 145); // 50px x, 45px y — not yet
+    dispatchPointer(document, "pointermove", 170, 155); // 70px x, 55px y — commits
+    dispatchPointer(document, "pointerup", 170, 155);
 
     expect(onSwipe).toHaveBeenCalledWith("right");
   });
@@ -315,9 +335,9 @@ describe("useSwipeGesture", () => {
     );
 
     // Start just outside the 36px left-edge zone.
-    dispatchTouch(document, "touchstart", 40, 100);
-    dispatchTouch(document, "touchmove", 150, 100);
-    dispatchTouch(document, "touchend", 150, 100);
+    dispatchPointer(document, "pointerdown", 40, 100);
+    dispatchPointer(document, "pointermove", 150, 100);
+    dispatchPointer(document, "pointerup", 150, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -332,14 +352,14 @@ describe("useSwipeGesture", () => {
       useSwipeGesture({ direction: "right", onSwipe }),
     );
 
-    dispatchTouch(document, "touchstart", 100, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
     // 20px right, 5px down — past slop, horizontal-dominant → axis locks.
-    dispatchTouch(document, "touchmove", 120, 105);
+    dispatchPointer(document, "pointermove", 120, 105);
     // Continue right but drift down more than sideways — still commits
     // because the axis is already locked horizontal.
-    dispatchTouch(document, "touchmove", 130, 160); // dx=30, dy=60
-    dispatchTouch(document, "touchmove", 160, 165); // dx=60 → past threshold
-    dispatchTouch(document, "touchend", 160, 165);
+    dispatchPointer(document, "pointermove", 130, 160); // dx=30, dy=60
+    dispatchPointer(document, "pointermove", 160, 165); // dx=60 → past threshold
+    dispatchPointer(document, "pointerup", 160, 165);
 
     expect(onSwipe).toHaveBeenCalledWith("right");
   });
@@ -352,12 +372,12 @@ describe("useSwipeGesture", () => {
       useSwipeGesture({ direction: "both", onSwipe }),
     );
 
-    dispatchTouch(document, "touchstart", 100, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
     // 5px right, 30px down — past slop, vertical-dominant → abandon.
-    dispatchTouch(document, "touchmove", 105, 130);
+    dispatchPointer(document, "pointermove", 105, 130);
     // Even if the finger then swings sideways, the gesture was abandoned.
-    dispatchTouch(document, "touchmove", 200, 130);
-    dispatchTouch(document, "touchend", 200, 130);
+    dispatchPointer(document, "pointermove", 200, 130);
+    dispatchPointer(document, "pointerup", 200, 130);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
@@ -368,10 +388,10 @@ describe("useSwipeGesture", () => {
       useSwipeGesture({ direction: "right", onSwipe }),
     );
 
-    dispatchTouch(document, "touchstart", 100, 100);
+    dispatchPointer(document, "pointerdown", 100, 100);
     // Past slop, horizontal → axis locks, but only 20px < 45 threshold.
-    dispatchTouch(document, "touchmove", 120, 100);
-    dispatchTouch(document, "touchend", 120, 100);
+    dispatchPointer(document, "pointermove", 120, 100);
+    dispatchPointer(document, "pointerup", 120, 100);
 
     expect(onSwipe).not.toHaveBeenCalled();
   });

@@ -62,34 +62,41 @@ export interface UseSwipeGestureOptions {
 }
 
 /**
- * Detect a horizontal finger swipe and report its direction.
+ * Detect a horizontal swipe and report its direction.
  *
- * This uses the axis-lock state machine that production touch UIs (Material
- * `SwipeableDrawer`, react-swipeable, iOS edge gestures) rely on:
+ * Uses the axis-lock state machine that production touch UIs (Material
+ * `SwipeableDrawer`, react-swipeable, iOS edge gestures) rely on, built on
+ * **Pointer Events** so it works uniformly for finger (touch), pen, AND
+ * mouse/trackpad:
  *
- *  1. `touchstart` records the origin (and, for `startEdge`, gates on the
- *     edge zone / scope).
- *  2. On the first `touchmove` whose total movement exceeds `AXIS_LOCK_SLOP`,
+ *  1. `pointerdown` records the origin (and, for `startEdge`, gates on the
+ *     edge zone / scope) and captures the pointer so we keep receiving
+ *     `pointermove` even after it leaves the start element.
+ *  2. On the first `pointermove` whose total movement exceeds `AXIS_LOCK_SLOP`,
  *     the axis is locked: horizontal → the hook calls `preventDefault()` to
  *     claim the gesture from the browser and keeps tracking; vertical → the
- *     hook abandons so the browser scrolls normally.
- *  3. Once axis-locked horizontal, every subsequent `touchmove` is
+ *     hook abandons so the browser scrolls/pan normally.
+ *  3. Once axis-locked horizontal, every subsequent `pointermove` is
  *     `preventDefault()`ed so the browser can't start a pan mid-gesture
  *     (this is what keeps a swipe alive through real-finger vertical drift).
  *  4. The swipe commits (`onSwipe` fires) when horizontal travel exceeds
  *     `threshold`; the action fires at most once per gesture.
  *
- * CRITICAL prerequisite: for the hook to receive horizontal `touchmove`
- * events at all, the touched scroll surface must have `touch-action: pan-y`
- * (or `none`). With the default `touch-action: auto` the browser consumes
- * horizontal panning itself and the listener never sees the moves. The
- * `.conversation-gesture-host` class (see `index.css`) applies `pan-y` to
- * the gesture surfaces — including nested scroll containers, since
- * `touch-action` is intersected up to the nearest scrolling element.
+ * Pointer type handling:
+ *  - **Open gestures** (no `targetRef`, document-level, edge-triggered) accept
+ *    mouse/touch/pen — so a desktop trackpad/mouse drag from a screen edge
+ *    opens the panel, not just a finger.
+ *  - **Close gestures** (`targetRef`-scoped to a panel body) accept touch/pen
+ *    only — a mouse drag inside the panel would otherwise hijack text
+ *    selection / clicking on desktop. Touch swipe-to-close keeps working.
  *
- * Pointer/mouse events are intentionally not handled — this is a touch-only
- * gesture. Desktop users continue to use the toggle buttons and the resize
- * handle.
+ * CRITICAL prerequisite for TOUCH pointers: for the hook to receive
+ * horizontal `pointermove` events, the touched scroll surface must have
+ * `touch-action: pan-y` (or `none`). With the default `touch-action: auto` the
+ * browser consumes horizontal panning itself and the listener never sees the
+ * moves. The `.conversation-gesture-host` class (see `index.css`) applies
+ * `pan-y` to the gesture surfaces. (Mouse/pen pointers are unaffected by
+ * `touch-action`.)
  */
 export function useSwipeGesture({
   direction = "both",
@@ -116,53 +123,73 @@ export function useSwipeGesture({
     const target: HTMLElement | Document = targetRef?.current ?? document;
     if (!target) return undefined;
 
+    // Scoped (close) gestures exclude mouse so a desktop click-drag inside a
+    // panel doesn't hijack text selection / native drag. Document-level open
+    // gestures accept all pointer types (mouse/trackpad can open too).
+    const scoped = target !== document;
+
     let startX = 0;
     let startY = 0;
+    let pointerId: number | null = null;
     let tracking = false;
     let axis: "horizontal" | "vertical" | null = null;
     let committed = false;
 
-    const handleTouchStart = (event: Event) => {
-      if (!(event instanceof TouchEvent) || event.touches.length !== 1) {
-        tracking = false;
-        axis = null;
-        return;
-      }
-      const touch = event.touches[0];
-      if (startEdge === "left" && touch.clientX > edgeWidth) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (scoped && event.pointerType === "mouse") return;
+      if (pointerId !== null) return; // ignore additional pointers mid-gesture
+      if (startEdge === "left" && event.clientX > edgeWidth) return;
       if (
         startEdge === "right" &&
-        touch.clientX < window.innerWidth - edgeWidth
+        event.clientX < window.innerWidth - edgeWidth
       )
         return;
-      // When scoped to an element, ignore touches that began outside it
+      // When scoped to an element, ignore pointers that began outside it
       // (the target's own children are inside it, so panel content swipes
-      // still work — but a touch starting on the chat body is excluded).
-      if (target !== document) {
+      // still work — but a pointer starting on the chat body is excluded).
+      if (scoped) {
         const node = event.target as Node | null;
-        if (!node || !target.contains(node)) return;
+        const el = target as HTMLElement;
+        if (!node || !el.contains(node)) return;
       }
-      startX = touch.clientX;
-      startY = touch.clientY;
+      startX = event.clientX;
+      startY = event.clientY;
+      pointerId = event.pointerId;
       tracking = true;
       axis = null;
       committed = false;
+      // For scoped (close) gestures, capture the pointer on the start element
+      // so pointermove keeps firing on it (and bubbling to the listener) even
+      // after the finger leaves the panel — otherwise a fast swipe that exits
+      // the panel would stop sending moves before reaching the threshold.
+      // Document-level (open) gestures deliberately do NOT capture: document
+      // already receives every bubbled pointermove regardless of which child
+      // the pointer is over, and capturing a touch at pointerdown (before we
+      // know if it's horizontal or vertical) can interfere with the browser's
+      // vertical-scroll handling on some mobile browsers.
+      if (scoped) {
+        const captureTarget = event.target as Element | null;
+        try {
+          captureTarget?.setPointerCapture?.(event.pointerId);
+        } catch {
+          // setPointerCapture can throw if the element is disconnected; ignore.
+        }
+      }
     };
 
-    const handleTouchMove = (event: Event) => {
+    const handlePointerMove = (event: PointerEvent) => {
       if (!tracking || committed) return;
-      if (!(event instanceof TouchEvent) || event.touches.length !== 1) return;
-      const touch = event.touches[0];
-      const dx = touch.clientX - startX;
-      const dy = touch.clientY - startY;
+      if (event.pointerId !== pointerId) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
       const adx = Math.abs(dx);
       const ady = Math.abs(dy);
 
       // Phase 1 — decide the axis once movement exceeds the slop. This is
       // the crucial early claim: we do it before the browser's own touch-slop
-      // lets it commit to a vertical pan (which would fire `touchcancel` and
+      // lets it commit to a vertical pan (which would fire `pointercancel` and
       // end our gesture). `preventDefault()` here tells the browser "I own
-      // this pointer", so it stops panning and keeps sending us touchmove.
+      // this pointer", so it stops panning and keeps sending us pointermove.
       if (axis === null) {
         if (Math.max(adx, ady) < AXIS_LOCK_SLOP) return;
         if (adx >= ady) {
@@ -192,27 +219,61 @@ export function useSwipeGesture({
         return;
       }
       committed = true;
+      // Suppress the synthetic click that follows a committed pointer drag
+      // (e.g. if the swipe started near a button) so opening doesn't also
+      // trigger a click handler.
+      if (event.cancelable) event.preventDefault();
       onSwipeRef.current(dir);
     };
 
-    const handleTouchEnd = () => {
+    const handlePointerUp = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
+      if (scoped) {
+        const captureTarget = event.target as Element | null;
+        try {
+          captureTarget?.releasePointerCapture?.(event.pointerId);
+        } catch {
+          // already released / element gone — ignore.
+        }
+      }
       tracking = false;
       axis = null;
       committed = false;
+      pointerId = null;
     };
 
-    // `passive: false` on touchmove so preventDefault works (we call it at
-    // axis-lock time, not just at commit); touchstart/touchend stay passive.
-    target.addEventListener("touchstart", handleTouchStart, { passive: true });
-    target.addEventListener("touchmove", handleTouchMove, { passive: false });
-    target.addEventListener("touchend", handleTouchEnd, { passive: true });
-    target.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    // `passive: false` on pointermove so preventDefault works (we call it at
+    // axis-lock time, not just at commit); pointerdown/up stay passive. The
+    // handlers are cast to EventListener because the DOM lib's
+    // addEventListener overload resolves to the generic EventListener rather
+    // than the PointerEvent-typed overload in this tsconfig.
+    target.addEventListener("pointerdown", handlePointerDown as EventListener, {
+      passive: true,
+    });
+    target.addEventListener("pointermove", handlePointerMove as EventListener, {
+      passive: false,
+    });
+    target.addEventListener("pointerup", handlePointerUp as EventListener, {
+      passive: true,
+    });
+    target.addEventListener("pointercancel", handlePointerUp as EventListener, {
+      passive: true,
+    });
 
     return () => {
-      target.removeEventListener("touchstart", handleTouchStart);
-      target.removeEventListener("touchmove", handleTouchMove);
-      target.removeEventListener("touchend", handleTouchEnd);
-      target.removeEventListener("touchcancel", handleTouchEnd);
+      target.removeEventListener(
+        "pointerdown",
+        handlePointerDown as EventListener,
+      );
+      target.removeEventListener(
+        "pointermove",
+        handlePointerMove as EventListener,
+      );
+      target.removeEventListener("pointerup", handlePointerUp as EventListener);
+      target.removeEventListener(
+        "pointercancel",
+        handlePointerUp as EventListener,
+      );
     };
   }, [direction, startEdge, edgeWidth, threshold, enabled, targetRef]);
 }
