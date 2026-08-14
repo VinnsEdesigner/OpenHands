@@ -53,17 +53,27 @@ body {
 }
 
 /*
- * Allow the browser's native vertical scrolling/panning but hand horizontal
- * touch movement to JavaScript. This is what lets the edge-swipe gestures
- * (open sidebar / open right panel / swipe-to-close) actually receive
- * touchmove events instead of the browser consuming the horizontal component
- * as a pan. Vertical scrolling is unaffected, so chat content still scrolls
- * normally. Applied to the app shell and conversation containers that host
- * the gesture listeners.
+ * Hand horizontal touch movement to JavaScript while keeping the browser's
+ * native vertical scrolling/panning. This is what lets the edge-swipe
+ * gestures (open sidebar / open right panel / swipe-to-close) actually
+ * receive touchmove events instead of the browser consuming the horizontal
+ * component as a pan.
+ *
+ * CRITICAL: per the Pointer Events spec, the browser determines the
+ * effective touch-action by INTERSECTING the values of the touched element
+ * and its ancestors, up to the NEAREST scrolling element — not the root.
+ * So pan-y on the app shell alone is useless: a touch inside a nested
+ * scroll container (e.g. the chat message scroller) uses that container's
+ * own touch-action, which defaults to `auto` (browser pans horizontally),
+ * and the document-level edge-swipe listener never sees the move. We
+ * therefore apply pan-y to the gesture hosts AND to the conversation-area
+ * scroll containers that a finger can land on. Vertical scrolling is
+ * unaffected everywhere, so chat content still scrolls normally.
  */
 [data-testid="root-layout"],
 #root-outlet,
-.conversation-gesture-host {
+.conversation-gesture-host,
+[data-testid="chat-scroll-container"] {
   touch-action: pan-y pinch-zoom;
 }
 

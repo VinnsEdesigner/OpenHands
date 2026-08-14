@@ -321,4 +321,58 @@ describe("useSwipeGesture", () => {
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
+
+  it("locks the axis early and survives vertical drift after a horizontal start", () => {
+    // Models the real-finger failure that made the old hook dead: the first
+    // move is horizontal enough to lock the axis, then subsequent moves
+    // drift vertically while still progressing horizontally. The axis lock
+    // must keep the gesture alive so it commits.
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({ direction: "right", onSwipe }),
+    );
+
+    dispatchTouch(document, "touchstart", 100, 100);
+    // 20px right, 5px down — past slop, horizontal-dominant → axis locks.
+    dispatchTouch(document, "touchmove", 120, 105);
+    // Continue right but drift down more than sideways — still commits
+    // because the axis is already locked horizontal.
+    dispatchTouch(document, "touchmove", 130, 160); // dx=30, dy=60
+    dispatchTouch(document, "touchmove", 160, 165); // dx=60 → past threshold
+    dispatchTouch(document, "touchend", 160, 165);
+
+    expect(onSwipe).toHaveBeenCalledWith("right");
+  });
+
+  it("abandons a gesture whose first movement is dominantly vertical", () => {
+    // A vertical-start touch is a scroll, not a swipe: the hook must abandon
+    // it (and NOT preventDefault) so the browser pans normally.
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({ direction: "both", onSwipe }),
+    );
+
+    dispatchTouch(document, "touchstart", 100, 100);
+    // 5px right, 30px down — past slop, vertical-dominant → abandon.
+    dispatchTouch(document, "touchmove", 105, 130);
+    // Even if the finger then swings sideways, the gesture was abandoned.
+    dispatchTouch(document, "touchmove", 200, 130);
+    dispatchTouch(document, "touchend", 200, 130);
+
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
+
+  it("does not commit before the threshold even after axis lock", () => {
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({ direction: "right", onSwipe }),
+    );
+
+    dispatchTouch(document, "touchstart", 100, 100);
+    // Past slop, horizontal → axis locks, but only 20px < 45 threshold.
+    dispatchTouch(document, "touchmove", 120, 100);
+    dispatchTouch(document, "touchend", 120, 100);
+
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
 });

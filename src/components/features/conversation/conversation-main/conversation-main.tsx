@@ -165,7 +165,7 @@ export function ConversationMain() {
             ref={desktopPanelRef}
             data-testid="desktop-right-panel"
             className={cn(
-              "transition-all duration-300 ease-in-out overflow-hidden",
+              "conversation-gesture-host transition-all duration-300 ease-in-out overflow-hidden",
               getDesktopTabPanelClass(isRightPanelShown),
             )}
             style={{

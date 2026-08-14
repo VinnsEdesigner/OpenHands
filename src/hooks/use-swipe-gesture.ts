@@ -8,15 +8,18 @@ import { useEffect, useRef, type RefObject } from "react";
 const DEFAULT_THRESHOLD = 45;
 
 /**
- * How much the horizontal travel must exceed the vertical travel for the
- * gesture to count as a horizontal swipe. Prevents hijacking vertical
- * scrolls: a mostly-downward drag never fires a swipe even if it drifts
- * sideways past the threshold. Kept close to 1.0 so a real finger — which
- * almost always drifts vertically while swiping sideways — can still
- * commit; a genuinely vertical scroll still has |dy| >> |dx| and is
- * rejected.
+ * Movement (px) before the gesture's axis is locked. Below this we just
+ * record the start and let the browser handle the touch; once total
+ * movement exceeds this slop we decide whether the gesture is horizontal
+ * (we claim it) or vertical (we abandon it so the browser scrolls). This
+ * MUST be smaller than the browser's own touch-slop (~8–16px on most
+ * platforms) so we get to call `preventDefault()` — and claim the gesture —
+ * before the browser commits to a vertical pan and fires `touchcancel`.
+ * Without this early claim, a real finger's inevitable first few px of
+ * vertical drift lets the browser steal the gesture and the swipe never
+ * fires.
  */
-const HORIZONTAL_DOMINANCE = 1.0;
+const AXIS_LOCK_SLOP = 8;
 
 /**
  * Width (px) of the screen-edge zone from which an *opening* swipe must
@@ -59,26 +62,34 @@ export interface UseSwipeGestureOptions {
 }
 
 /**
- * Detect a horizontal finger swipe and report its direction. The hook
- * attaches native `touchstart` / `touchmove` / `touchend` listeners to the
- * document (so it works regardless of which child element the finger lands
- * on) and only fires when:
+ * Detect a horizontal finger swipe and report its direction.
  *
- *  - the gesture is dominantly horizontal (vertical scrolls are never
- *    hijacked),
- *  - the horizontal travel exceeds `threshold`,
- *  - and, when `startEdge` is set, the touch began within `edgeWidth` px of
- *    that screen edge.
+ * This uses the axis-lock state machine that production touch UIs (Material
+ * `SwipeableDrawer`, react-swipeable, iOS edge gestures) rely on:
  *
- * This matches the native-touch convention already used in
- * `use-drag-resize.ts` and keeps the CSS-transition-driven panel animations
- * intact (the hook only dispatches an action; the existing transition does
- * the slide). A `preventDefault` is called only once a swipe has committed,
- * so taps and in-progress scrolls are not disrupted.
+ *  1. `touchstart` records the origin (and, for `startEdge`, gates on the
+ *     edge zone / scope).
+ *  2. On the first `touchmove` whose total movement exceeds `AXIS_LOCK_SLOP`,
+ *     the axis is locked: horizontal → the hook calls `preventDefault()` to
+ *     claim the gesture from the browser and keeps tracking; vertical → the
+ *     hook abandons so the browser scrolls normally.
+ *  3. Once axis-locked horizontal, every subsequent `touchmove` is
+ *     `preventDefault()`ed so the browser can't start a pan mid-gesture
+ *     (this is what keeps a swipe alive through real-finger vertical drift).
+ *  4. The swipe commits (`onSwipe` fires) when horizontal travel exceeds
+ *     `threshold`; the action fires at most once per gesture.
  *
- * Pointer/mouse events are intentionally not handled — this is a
- * touch-only gesture. Desktop users continue to use the toggle buttons and
- * the resize handle.
+ * CRITICAL prerequisite: for the hook to receive horizontal `touchmove`
+ * events at all, the touched scroll surface must have `touch-action: pan-y`
+ * (or `none`). With the default `touch-action: auto` the browser consumes
+ * horizontal panning itself and the listener never sees the moves. The
+ * `.conversation-gesture-host` class (see `index.css`) applies `pan-y` to
+ * the gesture surfaces — including nested scroll containers, since
+ * `touch-action` is intersected up to the nearest scrolling element.
+ *
+ * Pointer/mouse events are intentionally not handled — this is a touch-only
+ * gesture. Desktop users continue to use the toggle buttons and the resize
+ * handle.
  */
 export function useSwipeGesture({
   direction = "both",
@@ -108,11 +119,13 @@ export function useSwipeGesture({
     let startX = 0;
     let startY = 0;
     let tracking = false;
+    let axis: "horizontal" | "vertical" | null = null;
     let committed = false;
 
     const handleTouchStart = (event: Event) => {
       if (!(event instanceof TouchEvent) || event.touches.length !== 1) {
         tracking = false;
+        axis = null;
         return;
       }
       const touch = event.touches[0];
@@ -132,6 +145,7 @@ export function useSwipeGesture({
       startX = touch.clientX;
       startY = touch.clientY;
       tracking = true;
+      axis = null;
       committed = false;
     };
 
@@ -141,13 +155,33 @@ export function useSwipeGesture({
       const touch = event.touches[0];
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
-      // While the gesture is still dominantly vertical, keep tracking but
-      // don't commit — a swipe that starts with a little vertical drift can
-      // still become horizontal as the finger continues. A genuinely
-      // vertical scroll has |dy| >> |dx| for its whole duration and never
-      // crosses the threshold below, so it never fires.
-      if (Math.abs(dy) * HORIZONTAL_DOMINANCE > Math.abs(dx)) return;
-      if (Math.abs(dx) < threshold) return;
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
+
+      // Phase 1 — decide the axis once movement exceeds the slop. This is
+      // the crucial early claim: we do it before the browser's own touch-slop
+      // lets it commit to a vertical pan (which would fire `touchcancel` and
+      // end our gesture). `preventDefault()` here tells the browser "I own
+      // this pointer", so it stops panning and keeps sending us touchmove.
+      if (axis === null) {
+        if (Math.max(adx, ady) < AXIS_LOCK_SLOP) return;
+        if (adx >= ady) {
+          axis = "horizontal";
+          if (event.cancelable) event.preventDefault();
+        } else {
+          // Dominantly vertical from the start → it's a scroll, not a swipe.
+          // Don't preventDefault (let the browser pan) and stop tracking.
+          axis = "vertical";
+          tracking = false;
+          return;
+        }
+      }
+
+      // Axis locked horizontal — keep the browser out for the whole gesture.
+      if (event.cancelable) event.preventDefault();
+      if (axis !== "horizontal") return;
+
+      if (adx < threshold) return;
       const dir: SwipeDirection = dx < 0 ? "left" : "right";
       if (direction === "left" && dir !== "left") {
         tracking = false;
@@ -158,19 +192,17 @@ export function useSwipeGesture({
         return;
       }
       committed = true;
-      // Prevent the browser from also scrolling/panning once we've taken
-      // over the gesture.
-      if (event.cancelable) event.preventDefault();
       onSwipeRef.current(dir);
     };
 
     const handleTouchEnd = () => {
       tracking = false;
+      axis = null;
       committed = false;
     };
 
-    // `passive: false` on touchmove so preventDefault works after commit;
-    // touchstart/touchend stay passive (we don't cancel them).
+    // `passive: false` on touchmove so preventDefault works (we call it at
+    // axis-lock time, not just at commit); touchstart/touchend stay passive.
     target.addEventListener("touchstart", handleTouchStart, { passive: true });
     target.addEventListener("touchmove", handleTouchMove, { passive: false });
     target.addEventListener("touchend", handleTouchEnd, { passive: true });
