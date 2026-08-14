@@ -6,32 +6,30 @@ import { useEffect, useRef, useState } from "react";
  *
  * Activate by appending `#swipe-debug` to the conversation URL (e.g.
  * `/conversations/<id>?backend=…&org=…#swipe-debug`). The hash is purely
- * client-side — it is never sent to the server and does not interfere with
- * the `backend`/`org` query params the canvas uses to resolve the
- * conversation, so it won't redirect to "/" the way a `?swipe-debug=1`
- * query param does.
- * mirrors what `useSwipeGesture` does — attaches its own document-level
- * pointer listeners with an edge zone + axis-lock — and shows the raw truth
- * about pointer delivery on the device. This isolates WHICH stage fails:
+ * client-side — never sent to the server, and it coexists with the
+ * `backend`/`org` query params the canvas needs, so it won't redirect to "/"
+ * the way a `?swipe-debug=1` query param did.
  *
- *  - "down" never appears        → pointerdown doesn't reach document at all
- *                                   (OS / browser is consuming the touch).
- *  - "down" shows then "cancel"  → the OS (e.g. Android back-gesture nav)
- *                                   took over and cancelled the pointer.
- *  - "down" + moves but no axis  → movement under the 8px slop, or vertical.
- *  - "axis=H + travel" but no ✅   → never reached the 45px threshold.
- *  - "✅ commit" shows but panel   → the gesture fires but the open action /
- *   doesn't open                    gating is the bug (not detection).
+ * Mirrors `useSwipeGesture`: document-level pointer listeners + an edge zone
+ * + axis-lock, showing the raw truth about pointer delivery on-device so we
+ * can localize which stage fails (down missing / pointercancel / no axis /
+ * never reaches threshold / commits but action fails).
  *
- * The overlay does NOT call preventDefault or capture, so it observes
- * without interfering. It's a diagnostic only — remove once the gesture is
- * verified working on the target device.
+ * The overlay does NOT preventDefault or capture, so it observes without
+ * interfering. Diagnostic only — remove once the gesture is verified working.
+ *
+ * All transient gesture state (start coords, axis, pointer id, move count)
+ * lives in refs and the listeners are bound ONCE on mount — never re-bound
+ * on state changes. An earlier version re-ran the effect on each state
+ * change, tearing down and rebuilding listeners mid-gesture so almost every
+ * event was missed (only `vw`, read at render time, ever updated).
  */
 
 const DEBUG_HASH = "swipe-debug";
 const EDGE_WIDTH = 36;
 const SLOP = 8;
 const THRESHOLD = 45;
+const LOG_MAX = 6;
 
 interface DebugState {
   lastEvent: string;
@@ -46,6 +44,7 @@ interface DebugState {
   committed: string;
   moveCount: number;
   cancelled: boolean;
+  log: string[];
 }
 
 const INITIAL: DebugState = {
@@ -61,14 +60,52 @@ const INITIAL: DebugState = {
   committed: "—",
   moveCount: 0,
   cancelled: false,
+  log: [],
 };
 
 export function SwipeDebugOverlay() {
   const [state, setState] = useState<DebugState>(INITIAL);
-  const trackingId = useRef<number | null>(null);
+  const [active, setActive] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.location.hash === `#${DEBUG_HASH}`,
+  );
+  const [vw, setVw] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 0,
+  );
 
+  // Transient gesture state in refs so the once-bound listeners always read
+  // fresh values without re-binding.
+  const startRef = useRef({ x: 0, y: 0 });
+  const axisRef = useRef<string>("");
+  const idRef = useRef<number | null>(null);
+  const movesRef = useRef(0);
+
+  const pushLog = (prev: string[], entry: string): string[] => {
+    const next = [...prev, entry];
+    if (next.length > LOG_MAX) next.shift();
+    return next;
+  };
+
+  // Track hash changes (user can toggle the overlay by editing the hash).
   useEffect(() => {
-    if (window.location.hash !== `#${DEBUG_HASH}`) return undefined;
+    const sync = () => setActive(window.location.hash === `#${DEBUG_HASH}`);
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+
+  // Keep viewport width fresh.
+  useEffect(() => {
+    const onResize = () => setVw(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Bind the pointer listeners ONCE (only when active). Reads/writes refs so
+  // it never needs to re-bind mid-gesture.
+  useEffect(() => {
+    if (!active) return undefined;
 
     const onDown = (e: PointerEvent) => {
       const edge =
@@ -77,9 +114,13 @@ export function SwipeDebugOverlay() {
           : e.clientX >= window.innerWidth - EDGE_WIDTH
             ? "RIGHT"
             : "no";
-      trackingId.current = e.pointerId;
+      startRef.current = { x: e.clientX, y: e.clientY };
+      axisRef.current = "";
+      idRef.current = e.pointerId;
+      movesRef.current = 0;
       setState({
         ...INITIAL,
+        log: [],
         lastEvent: "pointerdown",
         pointerType: e.pointerType,
         startX: e.clientX,
@@ -87,51 +128,58 @@ export function SwipeDebugOverlay() {
         curX: e.clientX,
         curY: e.clientY,
         inEdgeZone: edge,
-        moveCount: 0,
       });
     };
+
     const onMove = (e: PointerEvent) => {
-      if (e.pointerId !== trackingId.current) return;
-      const dx = e.clientX - state.startX;
-      const dy = e.clientY - state.startY;
+      if (e.pointerId !== idRef.current) return;
+      const { x: sx, y: sy } = startRef.current;
+      const dx = e.clientX - sx;
+      const dy = e.clientY - sy;
       const adx = Math.abs(dx);
       const ady = Math.abs(dy);
-      let axis = state.axis;
-      if (axis === "—" && Math.max(adx, ady) >= SLOP) {
-        axis = adx >= ady ? "HORIZ" : "VERT";
+      if (!axisRef.current && Math.max(adx, ady) >= SLOP) {
+        axisRef.current = adx >= ady ? "HORIZ" : "VERT";
       }
+      const axis = axisRef.current;
       const dir = dx < 0 ? "left" : "right";
       const committed =
         axis === "HORIZ" && adx >= THRESHOLD ? `✅ ${dir}` : "—";
+      movesRef.current += 1;
       setState((s) => ({
         ...s,
         lastEvent: "pointermove",
         curX: e.clientX,
         curY: e.clientY,
-        axis,
+        axis: axis || "—",
         travel: adx,
         committed,
-        moveCount: s.moveCount + 1,
+        moveCount: movesRef.current,
+        log: pushLog(s.log, `mv ${adx | 0},${ady | 0} ${axis || "?"}`),
       }));
     };
+
     const onUp = (e: PointerEvent) => {
-      if (e.pointerId !== trackingId.current) return;
+      if (e.pointerId !== idRef.current) return;
       setState((s) => ({
         ...s,
         lastEvent: "pointerup",
         curX: e.clientX,
         curY: e.clientY,
+        log: pushLog(s.log, "up"),
       }));
-      trackingId.current = null;
+      idRef.current = null;
     };
+
     const onCancel = (e: PointerEvent) => {
-      if (e.pointerId !== trackingId.current) return;
+      if (e.pointerId !== idRef.current) return;
       setState((s) => ({
         ...s,
         lastEvent: "pointercancel",
         cancelled: true,
+        log: pushLog(s.log, "CANCEL"),
       }));
-      trackingId.current = null;
+      idRef.current = null;
     };
 
     document.addEventListener("pointerdown", onDown, { passive: true });
@@ -145,10 +193,9 @@ export function SwipeDebugOverlay() {
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onCancel);
     };
-    // Re-bind when start coords change so onMove sees fresh start values.
-  }, [state.startX, state.startY, state.axis]);
+  }, [active]);
 
-  if (window.location.hash !== `#${DEBUG_HASH}`) return null;
+  if (!active) return null;
 
   const rows: Array<[string, string | number]> = [
     ["event", state.lastEvent],
@@ -160,7 +207,7 @@ export function SwipeDebugOverlay() {
     ["travel|x", state.travel | 0],
     ["moves", state.moveCount],
     ["commit", state.committed],
-    ["vw", window.innerWidth],
+    ["vw", vw],
   ];
 
   return (
@@ -178,7 +225,7 @@ export function SwipeDebugOverlay() {
         color: "#0f0",
         fontFamily: "monospace",
         fontSize: 11,
-        lineHeight: 1.5,
+        lineHeight: 1.45,
         pointerEvents: "none",
         boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
       }}
@@ -197,6 +244,20 @@ export function SwipeDebugOverlay() {
           </span>
         </div>
       ))}
+      <div
+        style={{
+          marginTop: 4,
+          paddingTop: 4,
+          borderTop: "1px solid rgba(0,255,0,0.25)",
+          opacity: 0.85,
+        }}
+      >
+        {state.log.length === 0 ? (
+          <span style={{ opacity: 0.5 }}>no events yet</span>
+        ) : (
+          state.log.map((l, i) => <div key={`${i}-${l}`}>{l}</div>)
+        )}
+      </div>
     </div>
   );
 }
