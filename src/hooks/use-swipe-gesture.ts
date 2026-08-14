@@ -37,10 +37,15 @@ export interface UseSwipeGestureOptions {
    */
   direction?: "left" | "right" | "both";
   /**
-   * When set, the touchstart must begin within this many px of the given
-   * screen edge for the swipe to fire. Use `"left"` for an open-from-left
-   * gesture, `"right"` for open-from-right. Omit to allow the swipe to start
-   * anywhere on the element (useful for close gestures on a panel body).
+   * When set, a *non-touch* pointer (mouse/pen) must begin within this many
+   * px of the given screen edge for the swipe to fire. Use `"left"` for an
+   * open-from-left gesture, `"right"` for open-from-right. **Touch pointers
+   * skip this gate** — a finger can start the swipe anywhere on the surface,
+   * since touch users expect to open panels by swiping from anywhere on the
+   * chat body, not just the screen edge (and `touch-action: pan-y` ensures
+   * horizontal moves on the chat are ours to use without hijacking native
+   * scroll). Omit entirely to allow every pointer type to start anywhere
+   * (used for close gestures on a panel body).
    */
   startEdge?: "left" | "right";
   /** Edge zone width in px (only used when `startEdge` is set). */
@@ -138,8 +143,20 @@ export function useSwipeGesture({
     const handlePointerDown = (event: PointerEvent) => {
       if (scoped && event.pointerType === "mouse") return;
       if (pointerId !== null) return; // ignore additional pointers mid-gesture
-      if (startEdge === "left" && event.clientX > edgeWidth) return;
+      // The edge-start zone only constrains non-touch pointers (mouse/pen).
+      // Touch users expect to open the panels by swiping from anywhere on the
+      // chat surface, not just the very screen edge — so for touch we skip the
+      // edge gate. This is safe because the chat scroller's `touch-action:
+      // pan-y` hands horizontal moves to JS (no native h-scroll to hijack),
+      // while horizontally-scrollable children (code blocks) keep `auto` — the
+      // browser pans them and fires `pointercancel`, so our gesture never
+      // fires on them. Mouse/pen keep the edge requirement so a desktop
+      // click-drag-to-select in the chat doesn't open panels.
+      const enforceEdge = startEdge != null && event.pointerType !== "touch";
+      if (enforceEdge && startEdge === "left" && event.clientX > edgeWidth)
+        return;
       if (
+        enforceEdge &&
         startEdge === "right" &&
         event.clientX < window.innerWidth - edgeWidth
       )

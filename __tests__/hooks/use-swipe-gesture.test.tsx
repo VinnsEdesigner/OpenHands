@@ -86,7 +86,7 @@ describe("useSwipeGesture", () => {
     expect(onSwipe).toHaveBeenCalledWith("right");
   });
 
-  it("does not fire when the touch starts outside the edge zone", () => {
+  it("does not fire (mouse) when a non-touch pointer starts outside the edge zone", () => {
     const onSwipe = vi.fn();
     renderHook(() =>
       useSwipeGesture({
@@ -96,12 +96,33 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    // Start in the middle of the screen — outside the left edge zone.
+    // A mouse drag starting in the middle of the screen — outside the left
+    // edge zone. The edge gate still applies to non-touch pointers.
+    dispatchPointer(document, "pointerdown", 500, 100, 1, "mouse");
+    dispatchPointer(document, "pointermove", 700, 100, 1, "mouse");
+    dispatchPointer(document, "pointerup", 700, 100, 1, "mouse");
+
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
+
+  it("fires for a touch swipe that starts in the middle of the screen (no edge restriction for touch)", () => {
+    const onSwipe = vi.fn();
+    renderHook(() =>
+      useSwipeGesture({
+        direction: "right",
+        startEdge: "left",
+        onSwipe,
+      }),
+    );
+
+    // Touch users can open panels by swiping from anywhere on the chat
+    // surface, not just the screen edge — so the edge gate is skipped for
+    // touch pointers.
     dispatchPointer(document, "pointerdown", 500, 100);
     dispatchPointer(document, "pointermove", 700, 100);
     dispatchPointer(document, "pointerup", 700, 100);
 
-    expect(onSwipe).not.toHaveBeenCalled();
+    expect(onSwipe).toHaveBeenCalledWith("right");
   });
 
   it("fires onSwipe('left') for a leftward swipe from the right edge", () => {
@@ -323,7 +344,7 @@ describe("useSwipeGesture", () => {
     expect(onSwipe).toHaveBeenCalledWith("right");
   });
 
-  it("requires the touch to start within the edge zone for startEdge gestures", () => {
+  it("requires a non-touch pointer to start within the edge zone for startEdge gestures", () => {
     const onSwipe = vi.fn();
     renderHook(() =>
       useSwipeGesture({
@@ -334,10 +355,12 @@ describe("useSwipeGesture", () => {
       }),
     );
 
-    // Start just outside the 36px left-edge zone.
-    dispatchPointer(document, "pointerdown", 40, 100);
-    dispatchPointer(document, "pointermove", 150, 100);
-    dispatchPointer(document, "pointerup", 150, 100);
+    // A mouse drag starting just outside the 36px left-edge zone. Touch would
+    // skip the gate, so use a mouse pointer to verify the edge zone still
+    // constrains non-touch pointers.
+    dispatchPointer(document, "pointerdown", 40, 100, 1, "mouse");
+    dispatchPointer(document, "pointermove", 150, 100, 1, "mouse");
+    dispatchPointer(document, "pointerup", 150, 100, 1, "mouse");
 
     expect(onSwipe).not.toHaveBeenCalled();
   });
