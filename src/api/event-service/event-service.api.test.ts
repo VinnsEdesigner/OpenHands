@@ -97,8 +97,8 @@ describe("EventService.searchEvents transient cloud failures", () => {
   });
 
   it("propagates a 5xx on a timestamp-filtered request rather than degrading to empty", async () => {
-    // A 503 is transient (overload/maintenance), not the #14399 500-on-
-    // timestamp-filters bug, so it should still surface for retry.
+    // A 503 is transient (overload/maintenance), not the (now-fixed) #14399
+    // 500-on-timestamp-filters bug, so it should still surface for retry.
     callCloudProxyMock.mockRejectedValue(httpError(503));
 
     await expect(

@@ -193,13 +193,16 @@ class EventService {
       // sandbox. Path is singular `conversation` and v1-prefixed.
       //
       // Full pagination params (sort_order, page_id, timestamp filters)
-      // require the server-side fix from OpenHands/OpenHands#14399. If
-      // the cloud backend hasn't been updated yet, the timestamp filters
-      // trigger a 500 (str-vs-datetime comparison). We attempt the full
-      // request first; on failure we retry with the timestamp filters
-      // dropped (sort_order + page_id + limit only) so the caller still
-      // gets the most-recent events and the UI can open at the last
-      // message instead of falling back to a full WebSocket replay.
+      // originally required the server-side fix from OpenHands/OpenHands#14399.
+      // The cloud `events/search` handler used to 500 on `timestamp__lt`/
+      // `timestamp__gte` (a str-vs-datetime comparison), which broke "load
+      // older events" pagination entirely. That server-side bug has been
+      // FIXED and is live on app.all-hands.dev (verified 2026-08-14: both
+      // `timestamp__lt` and `timestamp__gte` now return 200 with correctly
+      // filtered results). The timestamp-filter retry below is kept as a
+      // safety net: if a future cloud regression reintroduces the 500, the
+      // caller still gets the most-recent events and the UI opens at the
+      // last message instead of falling back to a full WebSocket replay.
       const cloudLimit = Math.min(limit, 100);
       const hasFilterParams = !!(
         options.sortOrder ||
@@ -230,9 +233,11 @@ class EventService {
         // Transient failures (429 rate-limit, 5xx) must propagate so the
         // query layer retries them — silently degrading to an empty page
         // here would cache a blank history and render an already-finished
-        // conversation as empty. The degrade-to-empty fallback below exists
-        // only for the #14399 server bug (500 on timestamp filters), not for
-        // retries that could still succeed.
+        // conversation as empty. The degrade-to-empty fallback below was
+        // added for the #14399 server bug (500 on timestamp filters); that
+        // bug is now FIXED server-side (verified live 2026-08-14), so this
+        // path is a safety net against regression rather than an active
+        // workaround.
         const status = isSdkHttpError(err)
           ? (err as { status: number }).status
           : null;
@@ -241,11 +246,13 @@ class EventService {
         if (!hasFilterParams || isTransient) throw err;
         if (options.strictPagination) throw err;
 
-        // If the failure involved timestamp filters, retry without them —
-        // #14399's 500 is a str-vs-datetime comparison that only affects
-        // timestamp__gte/__lt, not sort_order or page_id. Keeping sort_order
-        // preserves DESC ordering (so the caller's reverse-to-chronological
-        // stays correct) while avoiding the broken filter.
+        // If the failure involved timestamp filters, retry without them.
+        // The #14399 500 (str-vs-datetime comparison) only affected
+        // timestamp__gte/__lt, not sort_order or page_id. That bug is now
+        // FIXED server-side (verified live 2026-08-14), so this branch is a
+        // safety net against regression. Keeping sort_order preserves DESC
+        // ordering (so the caller's reverse-to-chronological stays correct)
+        // while avoiding the broken filter if it ever returns.
         //
         // IMPORTANT: the retry drops `timestamp__lt`, so it can only return
         // the *most recent* page — the same ids the store already holds when
@@ -293,7 +300,8 @@ class EventService {
               "[EventService] Cloud backend rejected both full-param and " +
                 "limit+sort retry for older-events pagination. Stopping " +
                 "pagination (keeping loaded history). " +
-                "Server needs OpenHands/OpenHands#14399.",
+                "(Safety net for OpenHands/OpenHands#14399, which is now " +
+                "fixed server-side — verified live 2026-08-14.)",
             );
             return { items: [], next_page_id: null };
           }
