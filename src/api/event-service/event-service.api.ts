@@ -22,12 +22,20 @@ import type {
  *
  *   - **App API** (`backend.host`, default in `callCloudProxy`):
  *     event *history* (`/api/v1/conversation/{id}/events/search`).
- *     Persisted by the cloud backend — survives the runtime sandbox.
+ *     Persisted by the cloud backend — survives the runtime sandbox. Slow
+ *     (8–15s per page) and returns pages dominated by `StreamingDeltaEvent`
+ *     token fragments, so it is the *fallback* for live conversations and
+ *     the primary path for finished/slept sandboxes.
  *
  *   - **Runtime sandbox** (extracted from `conversation.conversation_url`
  *     and passed as `hostOverride`): live runtime endpoints like
- *     `/api/conversations/{id}/events/count` and
- *     `/api/conversations/{id}/events/respond_to_confirmation`. Auth on
+ *     `/api/conversations/{id}/events/count`,
+ *     `/api/conversations/{id}/events/respond_to_confirmation`, AND event
+ *     *history* (`/api/conversations/{id}/events/search`). The runtime
+ *     history endpoint is ~500× faster (sub-50ms vs 8–15s on the App API)
+ *     and returns clean, pre-collapsed `ActionEvent`/`ObservationEvent`
+ *     events instead of `StreamingDeltaEvent` token fragments, so it is the
+ *     *preferred* history source while the sandbox is reachable. Auth on
  *     these endpoints is `X-Session-API-Key`, not `Authorization: Bearer`.
  *
  * App API calls go directly to the cloud backend with bearer auth. Runtime
@@ -37,6 +45,28 @@ import type {
  * Local mode keeps the existing typescript-client path: it targets the
  * conversation's host directly via typed client classes.
  */
+
+/**
+ * Build the query-string params for an events/search request from the
+ * caller's options. Shared by the runtime-sandbox path and the App API
+ * fallback so both encode pagination/filter params identically — the two
+ * hosts accept the same `limit`/`sort_order`/`page_id`/`timestamp__*`
+ * vocabulary (the runtime endpoint is the same one local mode uses via
+ * `RemoteEventsList.search`).
+ */
+function buildSearchParams(
+  limit: number,
+  options: EventSearchOptions,
+): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (options.sortOrder) params.set("sort_order", options.sortOrder);
+  if (options.pageId) params.set("page_id", options.pageId);
+  if (options.timestampGte) params.set("timestamp__gte", options.timestampGte);
+  if (options.timestampLt) params.set("timestamp__lt", options.timestampLt);
+  return params;
+}
+
 class EventService {
   static async respondToConfirmation(
     conversationId: string,
@@ -110,7 +140,56 @@ class EventService {
     const limit = options.limit ?? 100;
 
     if (active.kind === "cloud") {
-      // Event *history* lives on the cloud App API, not the runtime
+      // Prefer the runtime sandbox endpoint while the sandbox is reachable:
+      // it is ~500× faster (sub-50ms vs 8–15s on the App API) and returns
+      // clean, pre-collapsed ActionEvent/ObservationEvent events instead of
+      // pages dominated by StreamingDeltaEvent token fragments. Reached
+      // through the same /api/cloud-proxy envelope as the live confirmation
+      // and count calls (hostOverride + X-Session-API-Key). Only attempted
+      // when a conversation_url is available (sandbox provisioned). A finished
+      // conversation whose sandbox has no live url, or a runtime failure
+      // (sandbox sleeping/paused, stale url, expired session key), falls
+      // through to the App API below — which persists events server-side and
+      // survives sandbox sleep.
+      if (conversationUrl) {
+        try {
+          const runtimeParams = buildSearchParams(
+            Math.min(limit, 100),
+            options,
+          );
+          const data = await callCloudProxy<EventSearchPage<OpenHandsEvent>>({
+            backend: active,
+            method: "GET",
+            hostOverride: buildHttpBaseUrl(conversationUrl),
+            path: `/api/conversations/${conversationId}/events/search?${runtimeParams.toString()}`,
+            authMode: "session-api-key",
+            sessionApiKey,
+          });
+          return {
+            items: data?.items ?? [],
+            next_page_id: data?.next_page_id ?? null,
+          };
+        } catch (runtimeErr) {
+          // The sandbox may be sleeping/paused, the conversation_url stale,
+          // or the session key missing/expired (404/401 are the common
+          // cases this fallback exists for). A transient 429/5xx on the
+          // runtime is also absorbed here and retried via the App API,
+          // which has its own retry/degradation handling — do NOT rethrow,
+          // or a momentary runtime blip would render the conversation blank
+          // instead of falling back to the (slower but complete) archive.
+          console.warn(
+            "[EventService] Runtime sandbox events/search failed; " +
+              "falling back to the cloud App API. " +
+              (runtimeErr instanceof Error
+                ? runtimeErr.message
+                : String(runtimeErr)),
+          );
+          // Fall through to the App API path below.
+        }
+      }
+
+      // --- App API fallback (cold-archive path) ---
+      // Event *history* also lives on the cloud App API, not just the runtime
       // sandbox. Path is singular `conversation` and v1-prefixed.
       //
       // Full pagination params (sort_order, page_id, timestamp filters)
@@ -132,13 +211,7 @@ class EventService {
         options.timestampGte || options.timestampLt
       );
 
-      const params = new URLSearchParams();
-      params.set("limit", String(cloudLimit));
-      if (options.sortOrder) params.set("sort_order", options.sortOrder);
-      if (options.pageId) params.set("page_id", options.pageId);
-      if (options.timestampGte)
-        params.set("timestamp__gte", options.timestampGte);
-      if (options.timestampLt) params.set("timestamp__lt", options.timestampLt);
+      const params = buildSearchParams(cloudLimit, options);
 
       const doCloudSearch = (searchParams: URLSearchParams) =>
         callCloudProxy<EventSearchPage<OpenHandsEvent>>({

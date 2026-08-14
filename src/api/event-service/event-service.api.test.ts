@@ -110,3 +110,115 @@ describe("EventService.searchEvents transient cloud failures", () => {
     ).rejects.toThrow(/503/);
   });
 });
+
+// `buildHttpBaseUrl` is used to derive the runtime host override; stub it so
+// the test asserts the hostOverride passed to callCloudProxy without
+// depending on window.location.
+const { buildHttpBaseUrlMock } = vi.hoisted(() => ({
+  buildHttpBaseUrlMock: vi.fn((url: string | null | undefined) =>
+    url ? `https://runtime.test${url ? "" : ""}` : "",
+  ),
+}));
+vi.mock("#/utils/websocket-url", () => ({
+  buildHttpBaseUrl: buildHttpBaseUrlMock,
+}));
+
+describe("EventService.searchEvents runtime-first history routing", () => {
+  beforeEach(() => {
+    callCloudProxyMock.mockReset();
+    buildHttpBaseUrlMock.mockReset();
+    buildHttpBaseUrlMock.mockImplementation((url: string | null | undefined) =>
+      url ? `https://runtime-from-url.test` : "",
+    );
+  });
+
+  it("prefers the runtime sandbox endpoint when conversation_url is present and returns its result", async () => {
+    // A live conversation: the runtime endpoint is ~500x faster and returns
+    // clean events. The cloud App API must NOT be hit at all.
+    const runtimePage = {
+      items: [{ id: "rt-1", kind: "ActionEvent" }],
+      next_page_id: "rt-cursor",
+    };
+    callCloudProxyMock.mockResolvedValueOnce(runtimePage);
+
+    const result = await EventService.searchEvents(
+      "conversation-1",
+      "https://sandbox.example/api/conversations/conversation-1",
+      "session-key-1",
+      { limit: 50, sortOrder: "TIMESTAMP_DESC" },
+    );
+
+    expect(result).toEqual({
+      items: [{ id: "rt-1", kind: "ActionEvent" }],
+      next_page_id: "rt-cursor",
+    });
+    expect(callCloudProxyMock).toHaveBeenCalledTimes(1);
+    const arg = callCloudProxyMock.mock.calls[0][0];
+    expect(arg.hostOverride).toBe("https://runtime-from-url.test");
+    expect(arg.authMode).toBe("session-api-key");
+    expect(arg.sessionApiKey).toBe("session-key-1");
+    expect(arg.path).toBe(
+      "/api/conversations/conversation-1/events/search?limit=50&sort_order=TIMESTAMP_DESC",
+    );
+  });
+
+  it("falls back to the cloud App API when the runtime sandbox fails (sandbox sleeping/paused)", async () => {
+    // The runtime endpoint rejects (e.g. 404 because the sandbox slept); the
+    // App API persists events server-side and must serve the fallback. The
+    // runtime failure is absorbed (warn), not rethrown.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    callCloudProxyMock
+      .mockRejectedValueOnce(httpError(404)) // runtime attempt fails
+      .mockResolvedValueOnce({
+        items: [{ id: "cloud-1", kind: "StreamingDeltaEvent" }],
+        next_page_id: "cloud-cursor",
+      }); // App API fallback succeeds
+
+    const result = await EventService.searchEvents(
+      "conversation-1",
+      "https://sandbox.example/api/conversations/conversation-1",
+      "session-key-1",
+      { limit: 50, sortOrder: "TIMESTAMP_DESC" },
+    );
+
+    expect(result).toEqual({
+      items: [{ id: "cloud-1", kind: "StreamingDeltaEvent" }],
+      next_page_id: "cloud-cursor",
+    });
+    expect(callCloudProxyMock).toHaveBeenCalledTimes(2);
+    // First call: runtime (hostOverride + session-api-key).
+    const runtimeArg = callCloudProxyMock.mock.calls[0][0];
+    expect(runtimeArg.hostOverride).toBeTruthy();
+    expect(runtimeArg.authMode).toBe("session-api-key");
+    // Second call: App API (no hostOverride, default bearer).
+    const appArg = callCloudProxyMock.mock.calls[1][0];
+    expect(appArg.hostOverride).toBeUndefined();
+    expect(appArg.path).toBe(
+      "/api/v1/conversation/conversation-1/events/search?limit=50&sort_order=TIMESTAMP_DESC",
+    );
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("goes straight to the cloud App API when no conversation_url is available", async () => {
+    // A finished conversation whose sandbox record has no live url: there is
+    // no runtime host to try, so the App API is the only path (no runtime
+    // attempt).
+    callCloudProxyMock.mockResolvedValueOnce({
+      items: [],
+      next_page_id: null,
+    });
+
+    await EventService.searchEvents("conversation-1", null, null, {
+      limit: 50,
+      sortOrder: "TIMESTAMP_DESC",
+    });
+
+    expect(callCloudProxyMock).toHaveBeenCalledTimes(1);
+    const arg = callCloudProxyMock.mock.calls[0][0];
+    expect(arg.hostOverride).toBeUndefined();
+    expect(arg.path).toBe(
+      "/api/v1/conversation/conversation-1/events/search?limit=50&sort_order=TIMESTAMP_DESC",
+    );
+  });
+});

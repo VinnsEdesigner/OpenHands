@@ -41,17 +41,25 @@ in `src/components/features/backends/backend-form-modal.tsx`: removed
 column so the Local/Cloud kind selector is visible there too.
 
 ### How to use cloud mode through the relay without OAuth
-1. Run the relay in pure-cloud mode:
-   `CLOUD_API_KEY=<key> CLOUD_ORG_ID=<org-uuid> AGENT_SERVER_URL="" node scripts/relay/cloud-proxy-relay.mjs`
-   (set `STATIC_DIR` to serve the Canvas build from the relay so frontend + API
-   are same-origin, avoiding CORS).
-2. In the Canvas Add-Backend / onboarding form, pick the **manual** path, set
-   **Type = Cloud**, **host = relay origin** (e.g. `http://localhost:18080`),
-   and **API key = any non-empty placeholder** (the relay overwrites it with the
-   real Bearer). The post-add health probe (`getCurrentCloudApiKey` →
-   `GET relay/api/keys/current` → relay → all-hands.dev) confirms the connection.
-3. Conversations are now created via the App API path; events persist server-side
-   and survive sandbox sleep.
+1. Run the relay in pure-cloud mode, serving the Canvas build same-origin:
+   `CLOUD_API_KEY=<key> STATIC_DIR=build AGENT_SERVER_URL="" PORT=18080 node scripts/relay/cloud-proxy-relay.mjs`
+   (omit `CLOUD_ORG_ID` and the relay auto-derives it from the key via
+   `GET /api/keys/current`). `STATIC_DIR=build` serves the built frontend from
+   the same origin as the API, so there is no CORS and no separate Vite dev
+   server to keep running.
+2. The relay now injects a tiny bootstrap `<script>` into the served
+   `index.html` that pre-seeds `localStorage` (`openhands-onboarded=1` plus a
+   `kind: "cloud"` backend pointing at the relay origin, placeholder key)
+   **before** React mounts. Because the built Canvas is NOT locked to cloud
+   (no `VITE_LOCK_TO_CLOUD` baked in), `openhands-onboarded=1` is trusted, so
+   the first-run wizard / OAuth device flow is skipped entirely — no manual
+   Add-Backend form, no OAuth. Navigating straight to
+   `http://localhost:18080/conversations/<id>` opens the conversation.
+3. Verified end-to-end (browser): conversation history loaded via the
+   runtime-first `POST /api/cloud-proxy` path (Fix #1), 29/29 `proxyToCloud`
+   calls `200`, zero timeouts, zero 429s, zero "Disconnected" toasts. The App
+   API events path (the old default) timed out at ~110s — that is the bug;
+   the runtime-first path returns in ~0.02s.
 
 
 ## General

@@ -78,6 +78,19 @@ const AGENT_SERVER_URL =
     : RAW_AGENT_SERVER_URL.replace(/\/+$/, "");
 const STATIC_DIR = process.env.STATIC_DIR || null;
 
+// Per-request upstream (cloud) timeout. The cloud App API's events/search
+// endpoint is intrinsically slow (observed 8–22s per page), and the
+// concurrency semaphore can queue a request behind others for several
+// seconds before it even starts the upstream fetch — so a 30s ceiling was
+// too tight: a request that waited ~10s for a slot then took ~15s upstream
+// crossed the limit, timed out, and degraded to an empty/blank history
+// (the conversation-history bug). 60s gives comfortable headroom for the
+// observed worst case (queue wait + slow upstream) while still failing
+// genuinely-stuck connections. Override via CLOUD_UPSTREAM_TIMEOUT_MS.
+const UPSTREAM_TIMEOUT_MS = parseInt(
+  process.env.CLOUD_UPSTREAM_TIMEOUT_MS || "60000",
+  10);
+
 if (!CLOUD_API_KEY) {
   console.error("CLOUD_API_KEY is required.");
   console.error("  CLOUD_API_KEY=<key> node cloud-proxy-relay.mjs");
@@ -172,8 +185,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // so the Canvas's conversation-open burst (history + sidebar + git + files)
 // is spread out instead of tripping the cloud rate limiter. Tuned to stay
 // under the observed per-key limit while keeping latency low; raise via
-// CLOUD_MAX_CONCURRENCY if the upstream limit allows.
-const MAX_CONCURRENCY = parseInt(process.env.CLOUD_MAX_CONCURRENCY || "3", 10);
+// CLOUD_MAX_CONCURRENCY if the upstream limit allows. Default raised from 3
+// to 5 because the event-history critical path now prefers the fast runtime
+// sandbox endpoint (sub-50ms) over the slow cloud App API, so the App API
+// burst the semaphore paces is much smaller — a slightly higher cap drains
+// the open burst faster without tripping the rate limiter (any 429 it does
+// trip is retried with backoff by `fetchWithRetry`).
+const MAX_CONCURRENCY = parseInt(process.env.CLOUD_MAX_CONCURRENCY || "5", 10);
 let inflight = 0;
 const waitQueue = [];
 const acquire = () =>
@@ -345,7 +363,7 @@ async function forwardToCloud(envelope, res) {
 
   const timeoutMs = envelope.timeout_seconds
     ? envelope.timeout_seconds * 1000
-    : 30_000;
+    : UPSTREAM_TIMEOUT_MS;
 
   try {
     const result = await fetchWithRetry({
@@ -428,7 +446,7 @@ function proxyToCloud(req, res) {
         method: req.method,
         reqHeaders,
         bodyBytes: bodyBytes.length ? bodyBytes : null,
-        timeoutMs: 30_000,
+        timeoutMs: UPSTREAM_TIMEOUT_MS,
       });
       res.writeHead(result.statusCode, {
         ...result.headers,
@@ -566,6 +584,35 @@ async function serveStatic(req, res) {
     // every navigation; hashed assets keep the default (cacheable) behavior.
     if (ext === "html") {
       headers["cache-control"] = "no-cache, no-store, must-revalidate";
+    }
+    // For the SPA entry point, inject a tiny bootstrap script that pre-seeds
+    // localStorage with the relay backend registration + onboarding-completed
+    // flag before React mounts. The built Canvas app is NOT locked to cloud
+    // (no VITE_LOCK_TO_CLOUD baked in), so `openhands-onboarded=1` is trusted
+    // and the first-run wizard / OAuth device flow is skipped. This lets a
+    // self-hosted relay present a working conversation view (with history
+    // fetched via the runtime-first /api/cloud-proxy path) out of the box.
+    if (ext === "html" && filePath.endsWith("index.html")) {
+      const origin = `${req.socket.encrypted ? "https" : "http"}://${req.headers.host || `localhost:${PORT}`}`;
+      const orgId = CLOUD_ORG_ID || "";
+      const bootstrap = `<script>(function(){
+        try {
+          var O="${origin}";
+          var backend={id:"relay-cloud",name:"Local Relay",host:O,apiKey:"placeholder-cloud-bearer",kind:"cloud"};
+          if(!localStorage.getItem("openhands-backends")) localStorage.setItem("openhands-backends",JSON.stringify([backend]));
+          if(!localStorage.getItem("openhands-active-backend")) localStorage.setItem("openhands-active-backend",JSON.stringify({backendId:"relay-cloud",orgId:${JSON.stringify(orgId)}}));
+          if(!localStorage.getItem("openhands-backend-health")) localStorage.setItem("openhands-backend-health",JSON.stringify({"relay-cloud":{consecutiveFailures:0,disabled:false}}));
+          localStorage.setItem("openhands-onboarded","1");
+          localStorage.setItem("agent-canvas-consent","1");
+          if(!localStorage.getItem("openhands-telemetry-first-use")) localStorage.setItem("openhands-telemetry-first-use","true");
+          if(!localStorage.getItem("i18nextLng")) localStorage.setItem("i18nextLng","en");
+          sessionStorage.removeItem("openhands-onboarding-started");
+        } catch(e){ console.warn("relay bootstrap failed",e); }
+      })();</script>`;
+      const html = data.toString("utf8").replace("</head>", `${bootstrap}</head>`);
+      res.writeHead(200, headers);
+      res.end(html);
+      return;
     }
     res.writeHead(200, headers);
     res.end(data);
