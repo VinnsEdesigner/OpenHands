@@ -4,8 +4,12 @@ import { useEffect, useRef, useState } from "react";
 /**
  * Temporary on-device diagnostics for the edge-swipe gestures.
  *
- * Activate with the URL param `?swipe-debug=1` (e.g.
- * `/conversations/<id>?swipe-debug=1`). Renders a small fixed panel that
+ * Activate by appending `#swipe-debug` to the conversation URL (e.g.
+ * `/conversations/<id>?backend=…&org=…#swipe-debug`). The hash is purely
+ * client-side — it is never sent to the server and does not interfere with
+ * the `backend`/`org` query params the canvas uses to resolve the
+ * conversation, so it won't redirect to "/" the way a `?swipe-debug=1`
+ * query param does.
  * mirrors what `useSwipeGesture` does — attaches its own document-level
  * pointer listeners with an edge zone + axis-lock — and shows the raw truth
  * about pointer delivery on the device. This isolates WHICH stage fails:
@@ -24,6 +28,7 @@ import { useEffect, useRef, useState } from "react";
  * verified working on the target device.
  */
 
+const DEBUG_HASH = "swipe-debug";
 const EDGE_WIDTH = 36;
 const SLOP = 8;
 const THRESHOLD = 45;
@@ -63,8 +68,7 @@ export function SwipeDebugOverlay() {
   const trackingId = useRef<number | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("swipe-debug") !== "1") return undefined;
+    if (window.location.hash !== `#${DEBUG_HASH}`) return undefined;
 
     const onDown = (e: PointerEvent) => {
       const edge =
@@ -144,8 +148,7 @@ export function SwipeDebugOverlay() {
     // Re-bind when start coords change so onMove sees fresh start values.
   }, [state.startX, state.startY, state.axis]);
 
-  const params = new URLSearchParams(window.location.search);
-  if (params.get("swipe-debug") !== "1") return null;
+  if (window.location.hash !== `#${DEBUG_HASH}`) return null;
 
   const rows: Array<[string, string | number]> = [
     ["event", state.lastEvent],
