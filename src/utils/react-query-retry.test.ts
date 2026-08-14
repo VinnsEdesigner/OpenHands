@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AxiosError } from "axios";
 import {
   getHttpErrorStatus,
+  isNetworkDropError,
   isTransientHttpError,
   retryOnTransient,
+  retryOnTransientAggressive,
 } from "./react-query-retry";
 
 // Mirrors the SDK's HttpError shape (name + numeric status) that
@@ -104,5 +106,84 @@ describe("retryOnTransient", () => {
     const err = sdkHttpError(429);
     expect(retryOnTransient(0, err, 2)).toBe(true);
     expect(retryOnTransient(2, err, 2)).toBe(false);
+  });
+});
+
+describe("isNetworkDropError", () => {
+  it("recognizes a local axios drop (no response)", () => {
+    const err = new AxiosError("network drop", "ERR_NETWORK");
+    expect(isNetworkDropError(err)).toBe(true);
+  });
+
+  it("recognizes the cloud SDK's timeout wrapper", () => {
+    // CloudClient.fetchAndParse wraps AbortSignal.timeout failures as a
+    // plain Error with this message. Without recognizing it, the cloud
+    // path never retried timeouts (the dominant failure for large
+    // conversations) and the query errored on the first timeout.
+    const err = new Error("Request timeout after 30000ms");
+    expect(isNetworkDropError(err)).toBe(true);
+  });
+
+  it("recognizes raw fetch abort/timeout DOMExceptions", () => {
+    // Some runtimes surface AbortSignal.timeout's abort as a bare Error
+    // whose name is TimeoutError/AbortError rather than the SDK's wrapped
+    // "Request timeout after Xms" message.
+    const timeout = Object.assign(new Error("Aborted"), {
+      name: "TimeoutError",
+    });
+    const abort = Object.assign(new Error("Aborted"), {
+      name: "AbortError",
+    });
+    expect(isNetworkDropError(timeout)).toBe(true);
+    expect(isNetworkDropError(abort)).toBe(true);
+  });
+
+  it("recognizes a fetch TypeError (Failed to fetch / network)", () => {
+    expect(isNetworkDropError(new TypeError("Failed to fetch"))).toBe(true);
+    expect(
+      isNetworkDropError(
+        new Error("NetworkError when attempting to fetch resource."),
+      ),
+    ).toBe(true);
+    expect(isNetworkDropError(new Error("network request failed"))).toBe(true);
+  });
+
+  it("does NOT treat a plain validation Error as a network drop", () => {
+    expect(
+      isNetworkDropError(new Error("Invalid conversation history response")),
+    ).toBe(false);
+    expect(isNetworkDropError(new Error("boom"))).toBe(false);
+    expect(isNetworkDropError(undefined)).toBe(false);
+  });
+
+  it("does NOT treat a non-network HTTP error as a drop", () => {
+    expect(isNetworkDropError(sdkHttpError(404))).toBe(false);
+    expect(isNetworkDropError(sdkHttpError(500))).toBe(false);
+  });
+});
+
+describe("retryOnTransientAggressive (cloud-path network drops)", () => {
+  it("retries a cloud fetch timeout up to networkRetries (default 6)", () => {
+    const err = new Error("Request timeout after 30000ms");
+    expect(retryOnTransientAggressive(0, err)).toBe(true);
+    expect(retryOnTransientAggressive(5, err)).toBe(true);
+    expect(retryOnTransientAggressive(6, err)).toBe(false);
+  });
+
+  it("retries a fetch TypeError up to networkRetries", () => {
+    const err = new TypeError("Failed to fetch");
+    expect(retryOnTransientAggressive(0, err)).toBe(true);
+    expect(retryOnTransientAggressive(6, err)).toBe(false);
+  });
+
+  it("still fails fast on a plain validation Error", () => {
+    const err = new Error(
+      "Invalid conversation history response: expected page.items to be an array.",
+    );
+    expect(retryOnTransientAggressive(0, err)).toBe(false);
+  });
+
+  it("still fails fast on non-transient HTTP errors (404)", () => {
+    expect(retryOnTransientAggressive(0, sdkHttpError(404))).toBe(false);
   });
 });

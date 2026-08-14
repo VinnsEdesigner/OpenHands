@@ -30,6 +30,48 @@ export function isHttpError(error: unknown): boolean {
 }
 
 /**
+ * Whether a non-HTTP error looks like a genuine network/connectivity
+ * failure that is safe to retry. The cloud path (`@openhands/typescript-client`
+ * `CloudClient`) uses `fetch` + `AbortSignal.timeout`, NOT axios, so a dropped
+ * connection or a request timeout surfaces as a plain `Error`/`TypeError`
+ * with no HTTP status and no `response`:
+ *
+ *   - `Error("Request timeout after 30000ms")` — the SDK wraps
+ *     `AbortSignal.timeout`'s `TimeoutError` into this message.
+ *   - `TypeError("Failed to fetch")` — a network-level failure (DNS, TCP,
+ *     TLS, CORS preflight rejection, the relay being unreachable).
+ *   - `DOMException` named `AbortError`/`TimeoutError` — some runtimes
+ *     surface the raw abort instead of the wrapped message.
+ *
+ * These are the cloud-mode equivalents of the local axios "no response"
+ * network drop: the request never produced a definitive HTTP result, so
+ * retrying is strictly safe (idempotent GETs) and is the second line of
+ * defense behind the relay's own proxy-layer retries. A plain `Error`
+ * thrown from a queryFn (e.g. a malformed-response validation error) has a
+ * different, deterministic message and is NOT matched here, so it still
+ * fails fast rather than retrying for seconds.
+ */
+export function isNetworkDropError(error: unknown): boolean {
+  if (error instanceof AxiosError) return !error.response;
+  if (!(error instanceof Error)) return false;
+  // The SDK's timeout wrapper (see CloudClient.fetchAndParse).
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+  const msg = error.message || "";
+  if (msg.startsWith("Request timeout after")) return true;
+  // fetch() network/CORS/TCP failures. Match the canonical message plus the
+  // common variants runtimes emit; a validation `Error` never matches these.
+  return (
+    msg.includes("Failed to fetch") ||
+    msg.includes("NetworkError") ||
+    msg.includes("network request failed") ||
+    // Node fetch undici errors leak through in SSR/preview builds.
+    msg.includes("ECONNRESET") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("fetch failed")
+  );
+}
+
+/**
  * Whether an error is a transient HTTP failure worth retrying: 429
  * (rate-limit) and 5xx (overload/maintenance). The cloud host rate-limits
  * the Canvas's conversation-open burst with 429s; retrying with backoff
@@ -49,12 +91,13 @@ export function isTransientHttpError(error: unknown): boolean {
  * hammering the server, and a validation error surfaces right away.
  *
  * Network errors (no HTTP status — a dropped connection, a relay 502 that
- * gave up after its own retries) are retried a few times too, since they're
- * often a momentary blip. The relay (`scripts/relay/cloud-proxy-relay.mjs`)
- * is the primary network-resilience layer (it retries network drops, 429, and
- * 5xx at the proxy); this query-level retry is a second line of defense for
- * the cases where the relay itself is unreachable or its retries are
- * exhausted.
+ * gave up after its own retries, or a cloud-path fetch timeout) are retried a
+ * few times too, since they're often a momentary blip. The relay
+ * (`scripts/relay/cloud-proxy-relay.mjs`) is the primary network-resilience
+ * layer (it retries network drops, 429, and 5xx at the proxy); this
+ * query-level retry is a second line of defense for the cases where the relay
+ * itself is unreachable, its retries are exhausted, or the upstream hung past
+ * the fetch timeout.
  *
  * Use in place of `retry: false` (which swallows transient 429s as permanent
  * failures) or the default `retry: 3` (which also retries non-transient
@@ -68,13 +111,13 @@ export function retryOnTransient(
   const status = getHttpErrorStatus(error);
   if (status === null) {
     // No HTTP status → not an HTTP response. Retry a handful of times only
-    // if it looks like a genuine network/connectivity failure (an
-    // AxiosError with no response, i.e. the request never reached the
-    // server). A plain thrown `Error` (e.g. a validation error) is NOT an
-    // AxiosError and is not retried — it fails immediately so the UI can
+    // if it looks like a genuine network/connectivity failure: either a
+    // local axios error with no response, OR a cloud-path fetch error
+    // (timeout / "Failed to fetch" / AbortError) that never produced an
+    // HTTP result. A plain thrown `Error` (e.g. a validation error) is
+    // neither and is not retried — it fails immediately so the UI can
     // surface the real problem rather than silently retrying for seconds.
-    const isNetworkDrop = error instanceof AxiosError && !error.response;
-    return isNetworkDrop ? failureCount < 3 : false;
+    return isNetworkDropError(error) ? failureCount < 3 : false;
   }
   if (isTransientHttpError(error)) return failureCount < maxRetries;
   return false;
@@ -92,11 +135,12 @@ export function retryOnTransient(
  *     of requests fired when a conversation opens, and a few extra attempts
  *     with react-query's exponential backoff let the request land once the
  *     limit window clears instead of showing an empty chat.
- *   - genuine network drops (no HTTP status, request never reached the
- *     server) also retry up to `networkRetries` (default 6) — these are the
- *     cases where the relay itself is momentarily unreachable, and giving
- *     up after 3 (the default `retryOnTransient` value) leaves a finished
- *     conversation blank.
+ *   - genuine network drops (no HTTP status: a local axios no-response, a
+ *     cloud-path fetch timeout/abort, or a "Failed to fetch") also retry up
+ *     to `networkRetries` (default 6) — these are the cases where the relay
+ *     itself is momentarily unreachable or the upstream hung past the fetch
+ *     timeout, and giving up after 3 (the default `retryOnTransient` value)
+ *     leaves a finished conversation blank.
  *
  * Non-transient HTTP errors (404/400/401) and plain validation `Error`s
  * still fail fast: retrying a 404 forever would just delay a real "not
@@ -113,8 +157,13 @@ export function retryOnTransientAggressive(
 ): boolean {
   const status = getHttpErrorStatus(error);
   if (status === null) {
-    const isNetworkDrop = error instanceof AxiosError && !error.response;
-    return isNetworkDrop ? failureCount < networkRetries : false;
+    // Cloud-path fetch timeouts/aborts and local axios no-response drops are
+    // the cases where the relay itself was momentarily unreachable (or the
+    // upstream hung past the fetch timeout). Giving up after 3 (the default
+    // `retryOnTransient` value) leaves a finished conversation blank, so the
+    // initial-history fetch retries harder here. A plain validation `Error`
+    // is not a network drop and still fails fast.
+    return isNetworkDropError(error) ? failureCount < networkRetries : false;
   }
   if (isTransientHttpError(error)) return failureCount < maxRetries;
   return false;

@@ -299,13 +299,25 @@ export function ChatInterface() {
   // slow/buggy), so rather than rendering a blank conversation we show an
   // inline "couldn't load history — Retry" block. The history query also
   // self-heals on a 10s interval, so this is mostly a transient-again
-  // affordance; only surface it when there are no events to show at all (a
-  // partially-loaded conversation stays usable).
-  const isHistoryError =
-    !!conversationWebSocket?.isHistoryError &&
+  // affordance.
+  //
+  // Two render modes, so the affordance never disappears mid-failure:
+  //  - Zero events in the store: a centered block replaces the chat (the
+  //    conversation is genuinely unusable until history loads).
+  //  - Some events already rendered (a partial page landed before the
+  //    failure, or the live-only WebSocket streamed one event): a compact
+  //    non-blocking banner ABOVE the messages, so the user can still read
+  //    what's there AND retry. The previous logic hid the error as soon as
+  //    a single event appeared ("the retry interface drops immediately"),
+  //    leaving a half-loaded conversation with no way to finish loading.
+  const isHistoryError = !!conversationWebSocket?.isHistoryError;
+  const retryHistory = conversationWebSocket?.retryHistory;
+  const hasHistoryErrorWithEvents =
+    isHistoryError && allConversationEvents.length > 0;
+  const hasHistoryErrorWithoutEvents =
+    isHistoryError &&
     allConversationEvents.length === 0 &&
     !hasPendingUserMessages;
-  const retryHistory = conversationWebSocket?.retryHistory;
 
   const isReturningToConversation = !!conversationId;
   // Only show loading skeleton when genuinely loading AND no events in store yet.
@@ -542,7 +554,7 @@ export function ChatInterface() {
               <ChatMessagesSkeleton />
             )}
 
-          {isHistoryError && (
+          {hasHistoryErrorWithoutEvents && (
             <div
               data-testid="history-load-error"
               className="mx-auto mt-4 flex max-w-md flex-col items-center gap-3 rounded-lg border border-[var(--oh-border)] bg-[var(--oh-surface-raised)] px-4 py-6 text-center"
@@ -557,6 +569,25 @@ export function ChatInterface() {
                 type="button"
                 onClick={retryHistory}
                 className="mt-1 cursor-pointer rounded-md border border-[var(--oh-border)] px-4 py-1.5 text-xs font-normal text-[var(--oh-foreground)] hover:bg-[var(--oh-interactive-hover)]"
+                data-testid="history-load-error-retry"
+              >
+                {t(I18nKey.CHAT_INTERFACE$MESSAGE_RETRY)}
+              </button>
+            </div>
+          )}
+
+          {hasHistoryErrorWithEvents && (
+            <div
+              data-testid="history-load-error-banner"
+              className="sticky top-0 z-10 mx-auto mt-2 flex w-full max-w-3xl items-center justify-between gap-3 rounded-md border border-[var(--oh-border)] bg-[var(--oh-surface-raised)] px-3 py-2 text-xs"
+            >
+              <span className="text-[var(--oh-muted)]">
+                {t(I18nKey.CHAT_INTERFACE$LOADING_CONVERSATION)}
+              </span>
+              <button
+                type="button"
+                onClick={retryHistory}
+                className="shrink-0 cursor-pointer rounded-md border border-[var(--oh-border)] px-3 py-1 text-xs font-normal text-[var(--oh-foreground)] hover:bg-[var(--oh-interactive-hover)]"
                 data-testid="history-load-error-retry"
               >
                 {t(I18nKey.CHAT_INTERFACE$MESSAGE_RETRY)}

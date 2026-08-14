@@ -288,17 +288,24 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
       expect(retryHistory).toHaveBeenCalledTimes(1);
     });
 
-    it("does not show the history-error block once events are present", () => {
+    it("shows a compact non-blocking retry banner (not the centered block) when history errored but partial events are present", () => {
+      const retryHistory = vi.fn();
       vi.mocked(useConversationWebSocket).mockReturnValue({
         isLoadingHistory: false,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
         reconnect: vi.fn(),
         isHistoryError: true,
-        retryHistory: vi.fn(),
+        retryHistory,
       });
 
-      // Even though history errored, partial events are usable — no error block.
+      // Even though history errored, partial events are usable — so the
+      // conversation is NOT replaced by the centered block. But the retry
+      // affordance must STAY available (as a banner above the messages)
+      // so the user can finish loading history. The previous behavior hid
+      // the error entirely once a single event appeared ("the retry
+      // interface drops immediately"), leaving a half-loaded conversation
+      // with no way to recover.
       const userEvent = createUserMessageEvent("evt-err-1");
       useEventStore.setState({
         events: [userEvent],
@@ -308,9 +315,17 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
 
       renderWithQueryClient(<ChatInterface />, queryClient);
 
+      // The centered replacement block is hidden (we keep the messages).
       expect(
         screen.queryByTestId("history-load-error"),
       ).not.toBeInTheDocument();
+
+      // The non-blocking banner with a retry button is shown instead.
+      const banner = screen.getByTestId("history-load-error-banner");
+      expect(banner).toBeInTheDocument();
+      const retryButton = screen.getByTestId("history-load-error-retry");
+      fireEvent.click(retryButton);
+      expect(retryHistory).toHaveBeenCalledTimes(1);
     });
   });
 });

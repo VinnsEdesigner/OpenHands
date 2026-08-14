@@ -1,10 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useRef } from "react";
 import { Query, useQuery } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import AgentServerConversationService from "#/api/conversation-service/agent-server-conversation-service.api";
 import { AppConversation } from "#/api/conversation-service/agent-server-conversation-service.types";
 import { useActiveBackend } from "#/contexts/active-backend-context";
+import { retryOnTransient } from "#/utils/react-query-retry";
 
 const FIVE_MINUTES = 1000 * 60 * 5;
 const FIFTEEN_MINUTES = 1000 * 60 * 15;
@@ -12,11 +11,11 @@ const FIFTEEN_MINUTES = 1000 * 60 * 15;
 type RefetchInterval = (
   query: Query<
     AppConversation | null,
-    AxiosError<unknown, any>,
+    unknown,
     AppConversation | null,
     (string | null)[]
   >,
-) => number;
+) => number | undefined | false | null;
 
 export const useUserConversation = (
   cid: string | null,
@@ -58,8 +57,29 @@ export const useUserConversation = (
       return results[0] ?? null;
     },
     enabled: !!cid && !cid.startsWith("task-") && !backendChanged,
-    retry: false,
-    refetchInterval,
+    // Opening a conversation is gated on this metadata fetch resolving: the
+    // history query (`useConversationHistory`) stays disabled until the
+    // conversation record (with `conversation_url`) is available, so a
+    // transient failure here with `retry: false` stranded the whole
+    // conversation as a blank suggestions page with no error and no retry.
+    // Retry confirmed transient failures (429/5xx + network drops, which
+    // includes cloud-path fetch timeouts) a handful of times; non-transient
+    // errors (a 404 for a genuinely missing conversation) still fail fast so
+    // the route can navigate away.
+    retry: retryOnTransient,
+    // Merge the caller's provisioning-state poll (e.g. the 3 s fast-poll
+    // while a sandbox is still provisioning) with a self-heal: if every
+    // retry above still fails, keep re-running on a slow interval until the
+    // conversation record arrives, so a conversation opened during a relay
+    // outage or cloud rate-limit burst fills itself in without the user
+    // having to refresh. Stops once it succeeds (no error).
+    refetchInterval: (query) => {
+      if (query.state.error && query.state.fetchStatus !== "fetching") {
+        return 10_000;
+      }
+      return refetchInterval?.(query) ?? undefined;
+    },
+    refetchIntervalInBackground: true,
     staleTime: FIVE_MINUTES,
     gcTime: FIFTEEN_MINUTES,
     // Suppress the global "Disconnected (check URL or network)" toast. This
