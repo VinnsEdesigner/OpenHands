@@ -79,3 +79,43 @@ export function retryOnTransient(
   if (isTransientHttpError(error)) return failureCount < maxRetries;
   return false;
 }
+
+/**
+ * Like `retryOnTransient` but tuned for the one fetch the UI absolutely
+ * cannot silently fail: the initial conversation history load. Opening a
+ * conversation that renders blank (no events, no error) is the worst
+ * experience this app can produce, so the initial-history fetch retries
+ * harder than a typical background query:
+ *
+ *   - confirmed transient HTTP failures (429 rate-limit / 5xx) retry up to
+ *     `maxRetries` (default 8) — the cloud host frequently 429s the burst
+ *     of requests fired when a conversation opens, and a few extra attempts
+ *     with react-query's exponential backoff let the request land once the
+ *     limit window clears instead of showing an empty chat.
+ *   - genuine network drops (no HTTP status, request never reached the
+ *     server) also retry up to `networkRetries` (default 6) — these are the
+ *     cases where the relay itself is momentarily unreachable, and giving
+ *     up after 3 (the default `retryOnTransient` value) leaves a finished
+ *     conversation blank.
+ *
+ * Non-transient HTTP errors (404/400/401) and plain validation `Error`s
+ * still fail fast: retrying a 404 forever would just delay a real "not
+ * found", and retrying a programming bug is pointless.
+ *
+ * Use ONLY for the initial history query; per-page "load older" pagination
+ * stays best-effort via `retryOnTransient`.
+ */
+export function retryOnTransientAggressive(
+  failureCount: number,
+  error: unknown,
+  maxRetries = 8,
+  networkRetries = 6,
+): boolean {
+  const status = getHttpErrorStatus(error);
+  if (status === null) {
+    const isNetworkDrop = error instanceof AxiosError && !error.response;
+    return isNetworkDrop ? failureCount < networkRetries : false;
+  }
+  if (isTransientHttpError(error)) return failureCount < maxRetries;
+  return false;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, fireEvent } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { render } from "@testing-library/react";
@@ -146,6 +146,8 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         connectionState: "OPEN",
         sendMessage: vi.fn(),
         reconnect: vi.fn(),
+        isHistoryError: false,
+        retryHistory: vi.fn(),
       });
 
       // Put agent-server user events in the store
@@ -176,6 +178,8 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         connectionState: "OPEN",
         sendMessage: vi.fn(),
         reconnect: vi.fn(),
+        isHistoryError: false,
+        retryHistory: vi.fn(),
       });
 
       // Store is empty
@@ -197,6 +201,8 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         connectionState: "OPEN",
         sendMessage: vi.fn(),
         reconnect: vi.fn(),
+        isHistoryError: false,
+        retryHistory: vi.fn(),
       });
 
       useEventStore.setState({
@@ -227,6 +233,8 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         connectionState: "OPEN",
         sendMessage: vi.fn(),
         reconnect: vi.fn(),
+        isHistoryError: false,
+        retryHistory: vi.fn(),
       });
 
       // agent-server events in store
@@ -247,6 +255,62 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         screen.queryByTestId("conversation-messages") ??
           screen.queryByTestId("user-message"),
       ).not.toBeNull();
+    });
+
+    it("shows an error + retry block (not a blank chat) when the REST history fetch errored", () => {
+      const retryHistory = vi.fn();
+      // History fetch exhausted all retries → error state, and no events yet.
+      vi.mocked(useConversationWebSocket).mockReturnValue({
+        isLoadingHistory: false,
+        connectionState: "OPEN",
+        sendMessage: vi.fn(),
+        reconnect: vi.fn(),
+        isHistoryError: true,
+        retryHistory,
+      });
+
+      useEventStore.setState({
+        events: [],
+        eventIds: new Set(),
+        uiEvents: [],
+      });
+
+      renderWithQueryClient(<ChatInterface />, queryClient);
+
+      // The conversation must NOT render blank: an explicit error block with a
+      // retry affordance is shown instead of a silent empty chat.
+      const errorBlock = screen.getByTestId("history-load-error");
+      expect(errorBlock).toBeInTheDocument();
+
+      const retryButton = screen.getByTestId("history-load-error-retry");
+      expect(retryButton).toBeInTheDocument();
+      fireEvent.click(retryButton);
+      expect(retryHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not show the history-error block once events are present", () => {
+      vi.mocked(useConversationWebSocket).mockReturnValue({
+        isLoadingHistory: false,
+        connectionState: "OPEN",
+        sendMessage: vi.fn(),
+        reconnect: vi.fn(),
+        isHistoryError: true,
+        retryHistory: vi.fn(),
+      });
+
+      // Even though history errored, partial events are usable — no error block.
+      const userEvent = createUserMessageEvent("evt-err-1");
+      useEventStore.setState({
+        events: [userEvent],
+        eventIds: new Set(["evt-err-1"]),
+        uiEvents: [userEvent],
+      });
+
+      renderWithQueryClient(<ChatInterface />, queryClient);
+
+      expect(
+        screen.queryByTestId("history-load-error"),
+      ).not.toBeInTheDocument();
     });
   });
 });

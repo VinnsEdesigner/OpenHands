@@ -144,7 +144,14 @@ describe("EventService.searchEvents — cloud branch", () => {
     warnSpy.mockRestore();
   });
 
-  it("degrades to empty page when both full-param and timestamp-filter-retry fail", async () => {
+  it("load-older path degrades to empty page on a non-transient failure (keeps loaded history)", async () => {
+    // A `timestamp__lt` anchor means this is scroll-up "load older", not the
+    // initial conversation-open load. A non-transient failure on both the
+    // full-param request and the timestamp-filter-dropped retry must STOP
+    // pagination gracefully (return empty) so the already-loaded recent
+    // history stays visible — surfacing an error during a background scroll
+    // the user didn't initiate would be wrong. (Transient 429/5xx still
+    // throw for retry — covered in the co-located test.)
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     vi.mocked(callCloudProxy)
@@ -167,27 +174,24 @@ describe("EventService.searchEvents — cloud branch", () => {
     warnSpy.mockRestore();
   });
 
-  it("degrades to empty page when a non-timestamp filter (sort_order) fails", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
+  it("throws when an initial-load request (sort_order only, no timestamp) fails", async () => {
+    // No `timestamp__lt` → this is the initial conversation-open load, which
+    // the UI cannot silently fail. A non-transient failure must PROPAGATE so
+    // the query layer enters its error state and the UI can render a retry
+    // affordance instead of a cached blank conversation.
     vi.mocked(callCloudProxy).mockRejectedValueOnce(
       new Error("Internal Server Error"),
     );
 
-    const result = await EventService.searchEvents("conv-1", null, null, {
-      limit: 50,
-      sortOrder: "TIMESTAMP_DESC",
-    });
+    await expect(
+      EventService.searchEvents("conv-1", null, null, {
+        limit: 50,
+        sortOrder: "TIMESTAMP_DESC",
+      }),
+    ).rejects.toThrow("Internal Server Error");
 
-    // No timestamp filters to drop → no retry → single call, empty page.
+    // No timestamp filters to drop → no retry → single call, then throw.
     expect(vi.mocked(callCloudProxy)).toHaveBeenCalledTimes(1);
-    expect(result.items).toHaveLength(0);
-    expect(result.next_page_id).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("doesn't support pagination filters"),
-    );
-
-    warnSpy.mockRestore();
   });
 
   it("rethrows when a limit-only request (no filter params) fails", async () => {

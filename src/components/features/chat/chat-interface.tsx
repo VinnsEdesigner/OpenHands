@@ -294,6 +294,19 @@ export function ChatInterface() {
     hasPendingUserMessages ||
     !conversationWebSocket?.isLoadingHistory;
 
+  // REST history fetch landed in an error state after exhausting all retries.
+  // The WebSocket is NEVER used as a history fallback (the `all` replay is too
+  // slow/buggy), so rather than rendering a blank conversation we show an
+  // inline "couldn't load history — Retry" block. The history query also
+  // self-heals on a 10s interval, so this is mostly a transient-again
+  // affordance; only surface it when there are no events to show at all (a
+  // partially-loaded conversation stays usable).
+  const isHistoryError =
+    !!conversationWebSocket?.isHistoryError &&
+    allConversationEvents.length === 0 &&
+    !hasPendingUserMessages;
+  const retryHistory = conversationWebSocket?.retryHistory;
+
   const isReturningToConversation = !!conversationId;
   // Only show loading skeleton when genuinely loading AND no events in store yet.
   // If events exist (e.g., remount after data was already fetched), skip skeleton.
@@ -529,14 +542,37 @@ export function ChatInterface() {
               <ChatMessagesSkeleton />
             )}
 
-            {isChatLoading && !isReturningToConversation && (
-              <div
-                className="flex justify-center"
-                data-testid="loading-spinner"
+          {isHistoryError && (
+            <div
+              data-testid="history-load-error"
+              className="mx-auto mt-4 flex max-w-md flex-col items-center gap-3 rounded-lg border border-[var(--oh-border)] bg-[var(--oh-surface-raised)] px-4 py-6 text-center"
+            >
+              <p className="text-sm font-semibold text-[var(--oh-foreground)]">
+                {t(I18nKey.COMMON$FAILED_TO_LOAD)}
+              </p>
+              <p className="text-xs text-[var(--oh-muted)]">
+                {t(I18nKey.CHAT_INTERFACE$LOADING_CONVERSATION)}
+              </p>
+              <button
+                type="button"
+                onClick={retryHistory}
+                className="mt-1 cursor-pointer rounded-md border border-[var(--oh-border)] px-4 py-1.5 text-xs font-normal text-[var(--oh-foreground)] hover:bg-[var(--oh-interactive-hover)]"
+                data-testid="history-load-error-retry"
               >
-                <LoadingSpinner size="small" />
-              </div>
-            )}
+                {t(I18nKey.CHAT_INTERFACE$MESSAGE_RETRY)}
+              </button>
+            </div>
+          )}
+
+          {isLoadingOlderEvents && (
+            <div
+              className="flex items-center justify-center gap-2 py-3 text-sm text-neutral-400"
+              data-testid="loading-older-events"
+            >
+              <LoadingSpinner size="small" />
+              <span>{t(I18nKey.CHAT_INTERFACE$FETCHING_OLDER_MESSAGES)}</span>
+            </div>
+          )}
 
             {isLoadingOlderEvents && (
               <div

@@ -94,6 +94,19 @@ interface ConversationWebSocketContextType {
   connectionState: WebSocketConnectionState;
   sendMessage: (message: SendMessageRequest) => Promise<SendMessageResult>;
   isLoadingHistory: boolean;
+  /**
+   * True when the REST history fetch has landed in an error state (after all
+   * retries). The WebSocket stays live-only — it is NEVER used as a history
+   * fallback (the `all` replay is too slow/buggy) — so when this is true and
+   * the event store has no events yet, the chat must surface an explicit
+   * error + retry UI rather than rendering blank.
+   */
+  isHistoryError: boolean;
+  /**
+   * Re-run the REST history fetch (invalidates the cached result and refetches).
+   * Backs the in-chat "Retry" affordance shown while `isHistoryError` is true.
+   */
+  retryHistory: () => void;
   reconnect: () => void;
 }
 
@@ -534,6 +547,27 @@ export function ConversationWebSocketProvider({
     () => isLoadingHistoryMain || isLoadingHistoryPlanning,
     [isLoadingHistoryMain, isLoadingHistoryPlanning],
   );
+
+  // Surface the REST history fetch's error state so the chat can render an
+  // explicit error + retry affordance instead of a blank conversation. We
+  // never use the WebSocket as a history fallback (the `all` replay is too
+  // slow/buggy), so a REST failure that exhausts all retries must be visible.
+  const isHistoryError = useMemo(
+    () => !!conversationId && isPreloadHistoryError,
+    [conversationId, isPreloadHistoryError],
+  );
+
+  // Manual "Retry" for the history fetch: invalidate the cached (errored)
+  // result and let react-query refetch immediately. The query also
+  // self-heals on a 10s `refetchInterval` while in error, so this is the
+  // "do it now" affordance on top of the background self-heal.
+  const retryHistory = useCallback(() => {
+    if (!conversationId) return;
+    queryClient.invalidateQueries({
+      queryKey: ["conversation-history", conversationId],
+      exact: false,
+    });
+  }, [queryClient, conversationId]);
 
   // Separate message handlers for each connection
   const handleMainMessage = useCallback(
@@ -1234,8 +1268,22 @@ export function ConversationWebSocketProvider({
   }, [planningAgentSocket, planningAgentWsUrl]);
 
   const contextValue = useMemo(
-    () => ({ connectionState, sendMessage, isLoadingHistory, reconnect }),
-    [connectionState, sendMessage, isLoadingHistory, reconnect],
+    () => ({
+      connectionState,
+      sendMessage,
+      isLoadingHistory,
+      isHistoryError,
+      retryHistory,
+      reconnect,
+    }),
+    [
+      connectionState,
+      sendMessage,
+      isLoadingHistory,
+      isHistoryError,
+      retryHistory,
+      reconnect,
+    ],
   );
 
   return (

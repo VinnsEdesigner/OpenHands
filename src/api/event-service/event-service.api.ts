@@ -199,8 +199,14 @@ class EventService {
               next_page_id: null,
             };
           } catch (retryErr) {
-            // Still transient after dropping timestamp filters — propagate
-            // rather than caching an empty page.
+            // This is the "load older events" path (a `timestamp__lt` anchor
+            // is set), not the initial conversation-open load. Transient
+            // failures (429/5xx) propagate so the query/scroll layer retries;
+            // a non-transient failure degrades to an empty page so scroll-up
+            // pagination simply stops, leaving the already-loaded recent
+            // history intact (the caller treats "no new events" as
+            // exhaustion). Throwing here would surface an error during a
+            // background scroll the user didn't initiate.
             const retryStatus = isSdkHttpError(retryErr)
               ? (retryErr as { status: number }).status
               : null;
@@ -212,21 +218,24 @@ class EventService {
             }
             console.warn(
               "[EventService] Cloud backend rejected both full-param and " +
-                "limit+sort retry. Falling back to empty page. " +
+                "limit+sort retry for older-events pagination. Stopping " +
+                "pagination (keeping loaded history). " +
                 "Server needs OpenHands/OpenHands#14399.",
             );
             return { items: [], next_page_id: null };
           }
         }
 
-        // No timestamp filters to drop — the failure is from sort_order/
-        // page_id themselves. Stop pagination to avoid an infinite loop.
-        console.warn(
-          "[EventService] Cloud backend doesn't support pagination filters. " +
-            "Falling back to initial load only. " +
-            "Server needs OpenHands/OpenHands#14399.",
-        );
-        return { items: [], next_page_id: null };
+        // No timestamp filters — this is the INITIAL conversation-open load
+        // (just `sort_order`, no `timestamp__lt`). This is the one fetch the UI
+        // cannot silently fail: degrading to an empty page here would cache a
+        // blank result, render an existing conversation as empty with no error
+        // and no retry, and — because the WebSocket is deliberately never used
+        // as a history fallback — leave the user with nothing. Propagate so
+        // the query layer enters its error state, retries aggressively, and
+        // the UI surfaces an explicit retry affordance instead of going blank.
+        // (Transient 429/5xx were already rethrown above for retry.)
+        throw err;
       }
     }
 
