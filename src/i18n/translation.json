@@ -16608,6 +16608,15 @@
     "uk": "Відновити завдання агента",
     "ca": "Reprèn la tasca de l'agent"
   },
+  "BROWSER$ZOOM_IN": {
+    "en": "Zoom in"
+  },
+  "BROWSER$ZOOM_OUT": {
+    "en": "Zoom out"
+  },
+  "BROWSER$VIEWPORT": {
+    "en": "Browser viewport"
+  },
   "BROWSER$SCREENSHOT_ALT": {
     "en": "Browser Screenshot",
     "zh-CN": "截图",
