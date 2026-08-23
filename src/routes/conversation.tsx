@@ -25,7 +25,6 @@ import { ConversationMain } from "#/components/features/conversation/conversatio
 import { ConversationMobilePanelPage } from "#/components/features/conversation/conversation-main/conversation-mobile-panel-page";
 import { ConversationOverviewDrawerProvider } from "#/components/features/conversation/conversation-overview-drawer-context";
 
-import { WebSocketProviderWrapper } from "#/contexts/websocket-provider-wrapper";
 import { useErrorMessageStore } from "#/stores/error-message-store";
 import { I18nKey } from "#/i18n/declaration";
 import { resumeCloudSandbox } from "#/api/cloud/conversation-service.api";
@@ -209,11 +208,7 @@ function AppContent() {
     </EventHandler>
   );
 
-  return (
-    <WebSocketProviderWrapper conversationId={conversationId}>
-      {content}
-    </WebSocketProviderWrapper>
-  );
+  return content;
 }
 
 export function ConversationView() {

@@ -47,6 +47,7 @@ import { TelemetryConsentBanner } from "#/components/features/analytics/telemetr
 import { buildAgentCanvasPath } from "#/utils/base-path";
 import { useOnboardingCompletion } from "#/components/features/onboarding/use-onboarding-completion";
 import { NavigationProvider } from "#/context/navigation-context";
+import { PersistentWebSocketProvider } from "#/contexts/persistent-websocket-provider";
 import {
   applyColorTheme,
   readPersistedColorTheme,
@@ -373,7 +374,9 @@ export default function App() {
 
   return (
     <>
-      <Outlet />
+      <PersistentWebSocketProvider>
+        <Outlet />
+      </PersistentWebSocketProvider>
       <TelemetryConsentBanner />
     </>
   );

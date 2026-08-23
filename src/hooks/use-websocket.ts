@@ -29,12 +29,84 @@ export const useWebSocket = (url: string, options?: WebSocketHookOptions) => {
   const shouldReconnectRef = React.useRef(true); // Only set to false by disconnect()
   // Track which WebSocket instances are allowed to reconnect using a WeakSet
   const allowedToReconnectRef = React.useRef<WeakSet<WebSocket>>(new WeakSet());
+  // Keepalive ping interval ref — prevents the browser from killing the WS
+  // when the tab is backgrounded (Chrome/Firefox throttle timers and can
+  // drop idle WebSockets after ~5 minutes of inactivity in hidden tabs).
+  const keepaliveRef = React.useRef<NodeJS.Timeout | null>(null);
+  // Track whether the tab was hidden — used to trigger an immediate
+  // reconnect with resend_mode=since when the tab becomes visible again.
+  const wasHiddenRef = React.useRef(false);
 
   // Store options in a ref to avoid reconnecting when callbacks change
   const optionsRef = React.useRef(options);
   React.useEffect(() => {
     optionsRef.current = options;
   }, [options]);
+
+  // --- Visibility-based keepalive and reconnect ---
+  // Browsers throttle setTimeout/setInterval in background tabs and may
+  // drop idle WebSocket connections. We send a periodic ping (an empty
+  // JSON object) to keep the connection alive, and on visibility regain
+  // we force an immediate reconnect if the WS dropped while hidden.
+  React.useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        wasHiddenRef.current = true;
+        // Start sending keepalive pings every 20 seconds while hidden.
+        // The server ignores unknown JSON messages gracefully (it tries
+        // to parse them as Message and silently drops on failure).
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          keepaliveRef.current = setInterval(() => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              try {
+                wsRef.current.send(JSON.stringify({ type: "ping" }));
+              } catch {
+                // Socket may have closed between checks — the onclose
+                // handler will trigger reconnection logic.
+              }
+            }
+          }, 20000);
+        }
+      } else {
+        // Tab became visible again.
+        if (keepaliveRef.current) {
+          clearInterval(keepaliveRef.current);
+          keepaliveRef.current = null;
+        }
+        // If the WS dropped while we were hidden, force an immediate
+        // reconnect instead of waiting for the 3-second timer (which may
+        // have been throttled and never fired).
+        if (wasHiddenRef.current) {
+          wasHiddenRef.current = false;
+          if (
+            shouldReconnectRef.current &&
+            (!wsRef.current ||
+              wsRef.current.readyState === WebSocket.CLOSED ||
+              wsRef.current.readyState === WebSocket.CLOSING)
+          ) {
+            // Reset attempt count so the reconnect is immediate
+            attemptCountRef.current = 0;
+            setIsReconnecting(true);
+            // Clear any pending throttled timeout
+            if (reconnectTimeoutRef.current) {
+              clearTimeout(reconnectTimeoutRef.current);
+              reconnectTimeoutRef.current = null;
+            }
+            connectWebSocket();
+          }
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (keepaliveRef.current) {
+        clearInterval(keepaliveRef.current);
+        keepaliveRef.current = null;
+      }
+    };
+  }, []);
 
   const connectWebSocket = React.useCallback(() => {
     // Build URL with query parameters if provided
@@ -170,6 +242,11 @@ export const useWebSocket = (url: string, options?: WebSocketHookOptions) => {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      // Clear keepalive interval
+      if (keepaliveRef.current) {
+        clearInterval(keepaliveRef.current);
+        keepaliveRef.current = null;
+      }
       // Close the WebSocket connection
       if (wsRef.current) {
         const { readyState } = wsRef.current;
@@ -203,6 +280,10 @@ export const useWebSocket = (url: string, options?: WebSocketHookOptions) => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
+    }
+    if (keepaliveRef.current) {
+      clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
     }
     if (wsRef.current) {
       // Remove from allowed list before closing
