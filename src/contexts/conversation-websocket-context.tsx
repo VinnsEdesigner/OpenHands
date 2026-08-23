@@ -293,8 +293,11 @@ export function ConversationWebSocketProvider({
   // user scrolls to the top of the chat. The WebSocket connection waits for
   // this query so it can subscribe with `resend_mode='since'` and avoid
   // re-streaming everything REST already returned.
-  const { data: preloadedHistory, isPending: isPreloadingHistory } =
-    useConversationHistory(conversationId);
+  const {
+    data: preloadedHistory,
+    isPending: isPreloadingHistory,
+    isError: isPreloadHistoryError,
+  } = useConversationHistory(conversationId);
 
   // Skeleton only on the genuine first load (no cached data yet). On return the
   // cached page is present, so `isPending` is false and we render the

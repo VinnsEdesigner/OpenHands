@@ -1,4 +1,5 @@
 import React from "react";
+import { useNavigate } from "react-router";
 import { cn } from "#/utils/utils";
 import { ChatInterfaceWrapper } from "./chat-interface-wrapper";
 import { ConversationTabContent } from "../conversation-tabs/conversation-tab-content/conversation-tab-content";
@@ -28,9 +29,16 @@ function getDesktopTabPanelClass(isRightPanelShown: boolean) {
 export function ConversationMain() {
   const isMobile = useBreakpoint();
   const isSidebarRailHidden = useBreakpoint(SIDEBAR_RAIL_COLLAPSE_MAX_WIDTH);
-  const { isRightPanelShown } = useConversationStore();
+  const { isRightPanelShown, setIsRightPanelShown, setSelectedTab } =
+    useConversationStore();
   const overviewDrawer = useConversationOverviewDrawerOptional();
   const isSecondaryDrawerOpen = Boolean(overviewDrawer?.section);
+  const isArchivedConversation = useIsArchivedConversation();
+  const desktopPanelRef = React.useRef<HTMLDivElement>(null);
+  const [hasRightPanelToggled, setHasRightPanelToggled] = React.useState(false);
+  const { conversationId } = useConversationId();
+  const navigate = useNavigate();
+  const { isOpen: isSidebarOpen } = useSidebarMobileNav();
 
   // Preload the right-panel's default tab chunk so opening the panel (via
   // swipe or the toggle button) doesn't first pay a JS-chunk download before
@@ -39,6 +47,13 @@ export function ConversationMain() {
   // is a pure cache-warming import — zero effect on data freshness, it just
   // resolves the React.lazy() boundary ahead of time.
   React.useEffect(() => {
+    void import("#/routes/files-tab");
+  }, []);
+
+  // Gesture-time prefetch: fires the moment a horizontal swipe is recognized
+  // (~150–400ms before commit), importing the files-tab chunk and warming
+  // the git-changes query so the panel renders instantly on swipe commit.
+  const prefetchRightPanel = React.useCallback(() => {
     void import("#/routes/files-tab");
   }, []);
 
