@@ -13,7 +13,7 @@ import {
   useBreakpoint,
   SIDEBAR_RAIL_COLLAPSE_MAX_WIDTH,
 } from "#/hooks/use-breakpoint";
-import { useConversationId } from "#/hooks/use-conversation-id";
+import { useOptionalConversationId } from "#/hooks/use-conversation-id";
 import { useIsArchivedConversation } from "#/hooks/use-is-archived-conversation";
 import { useSidebarMobileNav } from "#/components/features/sidebar/sidebar-mobile-nav-context";
 import { SidebarMobileMenuToggle } from "#/components/features/sidebar/sidebar-mobile-menu-toggle";
@@ -36,9 +36,9 @@ export function ConversationMain() {
   const isArchivedConversation = useIsArchivedConversation();
   const desktopPanelRef = React.useRef<HTMLDivElement>(null);
   const [hasRightPanelToggled, setHasRightPanelToggled] = React.useState(false);
-  const { conversationId } = useConversationId();
+  const { conversationId } = useOptionalConversationId();
   const navigate = useNavigate();
-  const { isOpen: isSidebarOpen } = useSidebarMobileNav();
+  const { isOpen: isSidebarOpen, open: openSidebar } = useSidebarMobileNav();
 
   // Preload the right-panel's default tab chunk so opening the panel (via
   // swipe or the toggle button) doesn't first pay a JS-chunk download before
