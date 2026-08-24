@@ -47,7 +47,6 @@ import { TelemetryConsentBanner } from "#/components/features/analytics/telemetr
 import { buildAgentCanvasPath } from "#/utils/base-path";
 import { useOnboardingCompletion } from "#/components/features/onboarding/use-onboarding-completion";
 import { NavigationProvider } from "#/context/navigation-context";
-import { PersistentWebSocketProvider } from "#/contexts/persistent-websocket-provider";
 import {
   applyColorTheme,
   readPersistedColorTheme,
@@ -374,45 +373,8 @@ export default function App() {
 
   return (
     <>
-      <AppNavigationProvider>
-        <PersistentWebSocketProvider>
-          <Outlet />
-        </PersistentWebSocketProvider>
-      </AppNavigationProvider>
+      <Outlet />
       <TelemetryConsentBanner />
     </>
-  );
-}
-
-/**
- * Provides the NavigationContext at the app root so that
- * useOptionalConversationId() (and therefore useActiveConversation())
- * resolves the conversation ID from the URL for ALL routes, not just
- * the FirstRunOnboardingScreen. Without this, the WebSocketProviderWrapper
- * can't fetch the conversation's conversation_url, and the WebSocket
- * never connects (stuck at "CONNECTING").
- */
-function AppNavigationProvider({ children }: { children: React.ReactNode }) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const routerNavigation = useRouterNavigation();
-  const conversationId =
-    location.pathname.match(/^\/conversations\/([^/]+)/)?.[1] ?? null;
-
-  const navigationValue = React.useMemo(
-    () => ({
-      currentPath: location.pathname,
-      conversationId,
-      isNavigating: Boolean(routerNavigation.location),
-      navigate: (to: string, options?: { replace?: boolean }) =>
-        navigate(to, options),
-    }),
-    [conversationId, location.pathname, navigate, routerNavigation.location],
-  );
-
-  return (
-    <NavigationProvider value={navigationValue}>
-      {children}
-    </NavigationProvider>
   );
 }
