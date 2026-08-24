@@ -374,10 +374,45 @@ export default function App() {
 
   return (
     <>
-      <PersistentWebSocketProvider>
-        <Outlet />
-      </PersistentWebSocketProvider>
+      <AppNavigationProvider>
+        <PersistentWebSocketProvider>
+          <Outlet />
+        </PersistentWebSocketProvider>
+      </AppNavigationProvider>
       <TelemetryConsentBanner />
     </>
+  );
+}
+
+/**
+ * Provides the NavigationContext at the app root so that
+ * useOptionalConversationId() (and therefore useActiveConversation())
+ * resolves the conversation ID from the URL for ALL routes, not just
+ * the FirstRunOnboardingScreen. Without this, the WebSocketProviderWrapper
+ * can't fetch the conversation's conversation_url, and the WebSocket
+ * never connects (stuck at "CONNECTING").
+ */
+function AppNavigationProvider({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const routerNavigation = useRouterNavigation();
+  const conversationId =
+    location.pathname.match(/^\/conversations\/([^/]+)/)?.[1] ?? null;
+
+  const navigationValue = React.useMemo(
+    () => ({
+      currentPath: location.pathname,
+      conversationId,
+      isNavigating: Boolean(routerNavigation.location),
+      navigate: (to: string, options?: { replace?: boolean }) =>
+        navigate(to, options),
+    }),
+    [conversationId, location.pathname, navigate, routerNavigation.location],
+  );
+
+  return (
+    <NavigationProvider value={navigationValue}>
+      {children}
+    </NavigationProvider>
   );
 }
