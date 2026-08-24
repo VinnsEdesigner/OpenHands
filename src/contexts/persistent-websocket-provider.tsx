@@ -49,6 +49,7 @@ function BackgroundConversationConnection({
       sessionApiKey={conversation?.session_api_key}
       subConversationIds={conversation?.sub_conversation_ids}
       subConversations={filteredSubConversations}
+      headless
     >
       <></>
     </ConversationWebSocketProvider>

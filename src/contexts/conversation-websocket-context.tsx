@@ -138,6 +138,7 @@ export function ConversationWebSocketProvider({
   sessionApiKey,
   subConversations,
   subConversationIds,
+  headless = false,
 }: {
   children: React.ReactNode;
   conversationId?: string;
@@ -145,6 +146,13 @@ export function ConversationWebSocketProvider({
   sessionApiKey?: string | null;
   subConversations?: AppConversation[];
   subConversationIds?: string[];
+  /**
+   * When true, the provider maintains the WebSocket connection (keeping the
+   * server's pub/sub subscriber alive) but does NOT process events into any
+   * global store. Used by background connections for non-viewed conversations
+   * so they don't clobber the foreground conversation's state.
+   */
+  headless?: boolean;
 }) {
   // Separate connection state tracking for each WebSocket
   const [mainConnectionState, setMainConnectionState] =
@@ -317,23 +325,18 @@ export function ConversationWebSocketProvider({
   // WebSocket resend (the agent's reply). Re-entering the same conversation is
   // a no-op, so the store survives navigating away to Settings and back.
   useLayoutEffect(() => {
+    if (headless) return;
     const nextId = conversationId ?? null;
     if (useEventStore.getState().loadedConversationId === nextId) {
       return;
     }
-    // Single atomic action: clears the previous conversation's events and
-    // records the new loaded id in one `set`, so no subscriber can observe a
-    // half-applied state (events gone but the old id still reported).
     clearEventsForConversation(nextId);
     resetBrowserStore();
-    // The metrics store is conversation-scoped state too: without a reset the
-    // previous conversation's usage/cost keeps rendering in the new
-    // conversation's meter until fresh WS stats arrive — and a brand-new
-    // conversation sends none, so the stale figure stuck indefinitely.
     useMetricsStore.getState().resetMetrics();
-  }, [conversationId, clearEventsForConversation, resetBrowserStore]);
+  }, [conversationId, clearEventsForConversation, resetBrowserStore, headless]);
 
   useLayoutEffect(() => {
+    if (headless) return;
     if (!preloadedHistory || preloadedHistory.events.length === 0) {
       return;
     }
@@ -577,6 +580,10 @@ export function ConversationWebSocketProvider({
       try {
         const event = JSON.parse(messageEvent.data);
 
+        // In headless mode (background connection), don't process events
+        // into stores — just keep the WS subscriber alive.
+        if (headless) return;
+
         // History loading for the main conversation is REST-driven now;
         // every WS message is a new event we add to the store.
 
@@ -798,6 +805,9 @@ export function ConversationWebSocketProvider({
     (messageEvent: MessageEvent) => {
       try {
         const event = JSON.parse(messageEvent.data);
+
+        // In headless mode (background connection), don't process events.
+        if (headless) return;
 
         // Track received events for history loading (count ALL events from WebSocket)
         // Always count when loading, even if we don't have the expected count yet
