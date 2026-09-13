@@ -16609,13 +16609,55 @@
     "ca": "Reprèn la tasca de l'agent"
   },
   "BROWSER$ZOOM_IN": {
-    "en": "Zoom in"
+    "en": "Zoom in",
+    "zh-CN": "放大",
+    "zh-TW": "放大",
+    "ko-KR": "확대",
+    "ja": "拡大",
+    "no": "Zoom inn",
+    "ar": "تكبير",
+    "de": "Vergrößern",
+    "fr": "Zoom avant",
+    "it": "Ingrandisci",
+    "pt": "Ampliar",
+    "es": "Acercar",
+    "tr": "Yakınlaştır",
+    "uk": "Збільшити",
+    "ca": "Amplia"
   },
   "BROWSER$ZOOM_OUT": {
-    "en": "Zoom out"
+    "en": "Zoom out",
+    "zh-CN": "缩小",
+    "zh-TW": "縮小",
+    "ko-KR": "축소",
+    "ja": "縮小",
+    "no": "Zoom ut",
+    "ar": "تصغير",
+    "de": "Verkleinern",
+    "fr": "Zoom arrière",
+    "it": "Riduci",
+    "pt": "Reduzir",
+    "es": "Alejar",
+    "tr": "Uzaklaştır",
+    "uk": "Зменшити",
+    "ca": "Allunya"
   },
   "BROWSER$VIEWPORT": {
-    "en": "Browser viewport"
+    "en": "Browser viewport",
+    "zh-CN": "浏览器视口",
+    "zh-TW": "瀏覽器視窗",
+    "ko-KR": "브라우저 뷰포트",
+    "ja": "ブラウザの表示領域",
+    "no": "Nettleserens visningsområde",
+    "ar": "منطقة عرض المتصفح",
+    "de": "Browser-Ansichtsfenster",
+    "fr": "Zone d'affichage du navigateur",
+    "it": "Area di visualizzazione del browser",
+    "pt": "Área de visualização do navegador",
+    "es": "Área de visualización del navegador",
+    "tr": "Tarayıcı görünüm alanı",
+    "uk": "Область перегляду браузера",
+    "ca": "Àrea de visualització del navegador"
   },
   "BROWSER$SCREENSHOT_ALT": {
     "en": "Browser Screenshot",

@@ -757,6 +757,46 @@ describe("handleEventForUI", () => {
       expect(result).toEqual([mockMessageEvent, action]);
     });
 
+    it("clears the delta when streamed text is the thought plus a DeepSeek （ … ） call preamble", () => {
+      const thought = "Write and run the repair now.";
+      // DeepSeek streams its tool-call preamble as a ``（``…``）``-wrapped run
+      // of full-width / ideographic punctuation that never survives into the
+      // finalized ``thought``.
+      const delta = makeStreamingDelta(
+        "delta-1",
+        `${thought}\n（。。、、、。．．．）`,
+      );
+      const action = makeThoughtAction("intermediate-1", thought);
+
+      const result = handleEventForUI(action, [mockMessageEvent, delta]);
+
+      expect(result).toEqual([mockMessageEvent, action]);
+    });
+
+    it("reconciles a CJK-wrapped call that straddles two per-frame deltas", () => {
+      const thought = "Coding and executing.";
+      const first = makeStreamingDelta("delta-1", `${thought}\n（。。。、`);
+      const merged = handleEventForUI(
+        makeStreamingDelta("delta-2", "。。。、）"),
+        handleEventForUI(first, [mockMessageEvent]),
+      );
+      const action = makeThoughtAction("intermediate-1", thought);
+
+      const result = handleEventForUI(action, merged);
+
+      expect(result).toEqual([mockMessageEvent, action]);
+    });
+
+    it("keeps a delta whose parenthetical has fewer than 4 dot chars (plain prose)", () => {
+      const thought = "Write and run the repair now.";
+      const delta = makeStreamingDelta("delta-1", `${thought}(ok)`);
+      const action = makeThoughtAction("intermediate-1", thought);
+
+      const result = handleEventForUI(action, [mockMessageEvent, delta]);
+
+      expect(result).toEqual([mockMessageEvent, delta, action]);
+    });
+
     // The planning and main sockets share this store, so the marker signal must
     // not let one agent's action strip the other's live delta.
     it("leaves a marker-bearing delta from the other agent untouched", () => {

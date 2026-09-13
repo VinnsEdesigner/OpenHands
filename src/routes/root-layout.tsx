@@ -18,6 +18,7 @@ import { useMigrateEnabledSkills } from "#/hooks/use-migrate-enabled-skills";
 import { useSyncTelemetryConsent } from "#/hooks/use-sync-telemetry-consent";
 import { useSyncAutomationTelemetryConsent } from "#/hooks/use-sync-automation-telemetry-consent";
 import { PersistentWebSocketProvider } from "#/contexts/persistent-websocket-provider";
+import { CanvasExtensionsRuntimeProvider } from "#/components/features/canvas-extensions/canvas-extensions-runtime";
 
 import { useTelemetryIdentity } from "#/hooks/use-telemetry-identity";
 import { LoadingSpinner } from "#/components/shared/loading-spinner";
@@ -121,39 +122,40 @@ export default function MainApp() {
             <title>{appTitle}</title>
             <Sidebar />
 
-          <div className="flex min-h-0 flex-col w-full min-w-0 h-full gap-3">
-            {!hideMobileSidebarMenuBar ? <SidebarMobileMenuBar /> : null}
-            {config.data &&
-              (config.data.maintenance_start_time ||
-                (config.data.faulty_models &&
-                  config.data.faulty_models.length > 0) ||
-                config.data.error_message) && (
-                <React.Suspense fallback={null}>
-                  <AlertBanner
-                    maintenanceStartTime={config.data.maintenance_start_time}
-                    faultyModels={config.data.faulty_models}
-                    errorMessage={config.data.error_message}
-                    updatedAt={config.data.updated_at}
-                  />
-                </React.Suspense>
-              )}
-            <div
-              id="root-outlet"
-              className="relative flex-1 overflow-auto px-0 custom-scrollbar"
-            >
-              <PersistentWebSocketProvider>
-                <Outlet />
-              </PersistentWebSocketProvider>
+            <div className="flex min-h-0 flex-col w-full min-w-0 h-full gap-3">
+              {!hideMobileSidebarMenuBar ? <SidebarMobileMenuBar /> : null}
+              {config.data &&
+                (config.data.maintenance_start_time ||
+                  (config.data.faulty_models &&
+                    config.data.faulty_models.length > 0) ||
+                  config.data.error_message) && (
+                  <React.Suspense fallback={null}>
+                    <AlertBanner
+                      maintenanceStartTime={config.data.maintenance_start_time}
+                      faultyModels={config.data.faulty_models}
+                      errorMessage={config.data.error_message}
+                      updatedAt={config.data.updated_at}
+                    />
+                  </React.Suspense>
+                )}
+              <div
+                id="root-outlet"
+                className="relative flex-1 overflow-auto px-0 custom-scrollbar"
+              >
+                <PersistentWebSocketProvider>
+                  <Outlet />
+                </PersistentWebSocketProvider>
+              </div>
             </div>
           </div>
-        </div>
-        <React.Suspense fallback={null}>
-          <EnvironmentSwitchOverlay />
-          <CommandMenu />
-        </React.Suspense>
-        {showOnboardingPreview ? <OnboardingHost /> : null}
-        <SwipeDebugOverlay />
-      </SidebarMobileNavProvider>
+          <React.Suspense fallback={null}>
+            <EnvironmentSwitchOverlay />
+            <CommandMenu />
+          </React.Suspense>
+          {showOnboardingPreview ? <OnboardingHost /> : null}
+          <SwipeDebugOverlay />
+        </SidebarMobileNavProvider>
+      </CanvasExtensionsRuntimeProvider>
     </ReactRouterNavigationProvider>
   );
 }

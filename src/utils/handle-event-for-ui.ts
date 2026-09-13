@@ -75,11 +75,21 @@ const findTextSegmentsInOrder = (
   return { matched: true, lastMatchEnd };
 };
 
+// The streamed text carries the model's raw bytes, while the finalized
+// ``thought`` arrives already-normalized by the SDK. DeepSeek in particular
+// pads its tool calls with full-width / ideographic punctuation (’╝łŃĆéŃĆü
+// fullwidth commas’╝ī) that never survive into the action, so character-exact
+// matching alone misses it. NFKC folds those to ASCII (’╝łŌåÆ(, ŃĆéŌåÆ., ŃĆüŌåÆ,,
+// ŃĆĆŌåÆspace) so the reconciliation tolerates that padding without loosening
+// the prose checks.
+
+const normalizeCallNoise = (text: string): string => text.normalize("NFKC");
+
 // Content-bearing streaming deltas of the current turn (after the last user
 // message) that share the final event's sender. Reasoning-only deltas are
 // excluded: reasoning renders in its own collapsed bubble and never overlaps
 // the message text being reconciled. Sender scoping matters because the main
-// and planning sockets share this event store — without it, one agent's final
+// and planning sockets share this event store ŌĆö without it, one agent's final
 // event would strip the other agent's still-live streamed deltas (#1656).
 const getCurrentTurnContentDeltas = (
   uiEvents: OpenHandsEvent[],
@@ -194,6 +204,19 @@ const matchStreamedSegments = (
   const searchSegments = segments.map((segment, index) =>
     index === lastIndex ? segment.trimEnd() : segment,
   );
+  // DeepSeek (and other CJK-adjacent models) stream raw full-width
+  // punctuation around the call that the SDK normalizes away by the time it
+  // builds the action's ``thought``. Retry the ordered match with NFKC-folded
+  // text on both sides so those deltas reconcile too (see ``normalizeCallNoise``).
+  const searchSegmentsNormalized = searchSegments.map(normalizeCallNoise);
+  const targetNormalized = normalizeCallNoise(targetText);
+  const inOrderNormalized = findTextSegmentsInOrder(
+    targetNormalized,
+    searchSegmentsNormalized,
+  );
+  if (inOrderNormalized.matched) {
+    return { matched: true, lastMatchEnd: inOrderNormalized.lastMatchEnd };
+  }
   return findTextSegmentsInOrder(targetText, searchSegments);
 };
 
@@ -202,6 +225,35 @@ const matchStreamedSegments = (
 // a superset of the action's `thought` that `matchStreamedSegments` can't match.
 const hasUnstrippedFunctionCallMarker = (segments: string[]): boolean =>
   segments.some((segment) => segment.includes("<function="));
+
+// DeepSeek emits its tool-call preamble as a ``（``…``）``-wrapped run of
+// full-width ideographic punctuation (。、．…) padding around the parameter
+// text — none of which survives into the finalized ``action.thought`` either.
+// The shape has no ``<function=`` marker, so treat a wrapped punctuation run
+// as the same "unstripped prompted call" signal. The thresholds are
+// collision-averse: only the LAST matched ``（``…``）`` pair counts, and the
+// body needs 4+ dot/comma chars (after NFKC-folding), so normal prose —
+// even ragged dot leaders — is never mistaken for a call preamble.
+
+const CJK_CALL_WRAPPER_START = "（";
+const CJK_CALL_WRAPPER_END = "）";
+const CJK_CALL_MIN_NOISE_CHARS = 4;
+
+const hasCjkWrappedToolCallMarker = (segments: string[]): boolean => {
+  // The wrapper can straddle two per-frame deltas, so check both each segment
+  // and the fully-joined stream text.
+  const candidates = [...segments, segments.join("")];
+  return candidates.some((text) => {
+    if (!text.includes(CJK_CALL_WRAPPER_START)) return false;
+    const start = text.lastIndexOf(CJK_CALL_WRAPPER_START);
+    const end = text.lastIndexOf(CJK_CALL_WRAPPER_END);
+    if (end <= start) return false;
+    const body = normalizeCallNoise(text.slice(start + 1, end));
+    if (!body.trim()) return false;
+    const noiseChars = body.replace(/\s/g, "").match(/[.,、。…]/g);
+    return (noiseChars?.length ?? 0) >= CJK_CALL_MIN_NOISE_CHARS;
+  });
+};
 
 // Whether the finalized event renders its own reasoning: an ActionEvent via
 // reasoning_content/thinking_blocks, an agent MessageEvent via an inline
@@ -225,7 +277,7 @@ const eventRendersReasoning = (event: OpenHandsEvent): boolean => {
 // The final MessageEvent/FinishAction is authoritative for the turn's text. Drop
 // the provisional streamed deltas and render the canonical final event instead,
 // so the message is rendered exactly once (never holey or duplicated) and its
-// metadata — critic_result, activated_skills — renders too. Stream-only
+// metadata ŌĆö critic_result, activated_skills ŌĆö renders too. Stream-only
 // reasoning is preserved. Returns null when there is no streamed content to
 // reconcile, leaving the caller to append the final event normally.
 const finalizeStreamingDeltasInPlace = (
@@ -288,7 +340,11 @@ const supersedeStreamedThoughtWithAction = (
     thoughtText,
     streamingSegments,
   ).matched;
-  if (!matchedThought && !hasUnstrippedFunctionCallMarker(streamingSegments)) {
+  if (
+    !matchedThought &&
+    !hasUnstrippedFunctionCallMarker(streamingSegments) &&
+    !hasCjkWrappedToolCallMarker(streamingSegments)
+  ) {
     return null;
   }
 
@@ -338,7 +394,7 @@ const supersedeStreamedReasoningWithAction = (
  * Replaces actions with observations when they arrive (so UI shows observation instead of action)
  * Exception: ThinkAction is NOT replaced because the thought content is in the action, not in the observation
  *
- * ACPToolCallEvent merge: the SDK emits two events per ``tool_call_id`` — an
+ * ACPToolCallEvent merge: the SDK emits two events per ``tool_call_id`` ŌĆö an
  * early ``started`` event (``pending`` / ``in_progress``) and one terminal
  * (completed / failed) event, the action->observation pair for a tool call.
  * Replace the started entry in place with the terminal one so a single card
@@ -385,7 +441,7 @@ export const handleEventForUI = (
   }
 
   // Intermediate tool-calling action whose thought was streamed: clear the
-  // duplicated text from the delta (issue #1534). ThinkAction is excluded — its
+  // duplicated text from the delta (issue #1534). ThinkAction is excluded ŌĆö its
   // thought renders through its own collapsible, not a hoisted thought.
   if (
     isActionEvent(event) &&
