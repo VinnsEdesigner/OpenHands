@@ -12,6 +12,7 @@ interface UseGitRepositoriesOptions {
   provider: Provider | null;
   pageSize?: number;
   enabled?: boolean;
+  allowMissingProvider?: boolean;
 }
 
 type InstallationCursor = { installationIndex: number; pageId: string | null };
@@ -19,9 +20,14 @@ type UserCursor = string | null;
 type Cursor = InstallationCursor | UserCursor;
 
 export function useGitRepositories(options: UseGitRepositoriesOptions) {
-  const { provider, pageSize = 30, enabled = true } = options;
+  const {
+    provider,
+    pageSize = 30,
+    enabled = true,
+    allowMissingProvider = false,
+  } = options;
   const { providers } = useUserProviders();
-  const { data: page } = useAppInstallations(provider);
+  const { data: page } = useAppInstallations(provider, { enabled });
   const installations = page?.items;
   const active = useActiveBackend();
 
@@ -105,7 +111,7 @@ export function useGitRepositories(options: UseGitRepositoriesOptions) {
       : null,
     enabled:
       enabled &&
-      (providers || []).length > 0 &&
+      (allowMissingProvider || (providers || []).length > 0) &&
       !!provider &&
       (!useInstallationRepos ||
         (Array.isArray(installations) && installations.length > 0)),

@@ -38,6 +38,8 @@ export const useUserConversation = (
     origin.current = { cid, backendId: active.backend.id };
   }
   const backendChanged = origin.current.backendId !== active.backend.id;
+  const hasConversationScope =
+    active.backend.kind !== "cloud" || !!active.orgId;
 
   return useQuery({
     // Include the active backend identity so each (backend, org) pair
@@ -56,7 +58,11 @@ export const useUserConversation = (
         await AgentServerConversationService.batchGetAppConversations([cid]);
       return results[0] ?? null;
     },
-    enabled: !!cid && !cid.startsWith("task-") && !backendChanged,
+    enabled:
+      !!cid &&
+      !cid.startsWith("task-") &&
+      !backendChanged &&
+      hasConversationScope,
     // Opening a conversation is gated on this metadata fetch resolving: the
     // history query (`useConversationHistory`) stays disabled until the
     // conversation record (with `conversation_url`) is available, so a
@@ -80,6 +86,11 @@ export const useUserConversation = (
       return refetchInterval?.(query) ?? undefined;
     },
     refetchIntervalInBackground: true,
+    // Freshness while it matters is already covered by `refetchInterval`
+    // above; refetching on every window focus too would fire a request the
+    // instant a backgrounded tab regains focus — a burst that compounds the
+    // conversation-open one against the cloud rate limiter.
+    refetchOnWindowFocus: false,
     staleTime: FIVE_MINUTES,
     gcTime: FIFTEEN_MINUTES,
     // Suppress the global "Disconnected (check URL or network)" toast. This

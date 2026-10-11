@@ -12,6 +12,7 @@ import { useSidebarMobileNav } from "./sidebar-mobile-nav-context";
 import { useSidebarStore } from "#/stores/sidebar-store";
 import { useClickOutsideElement } from "#/hooks/use-click-outside-element";
 import { useSwipeGesture } from "#/hooks/use-swipe-gesture";
+import { useCloseOnEscape } from "#/hooks/use-close-on-escape";
 import { useBackendsHealth } from "#/hooks/query/use-backends-health";
 // The LLM settings modal is only mounted when the settings query 404s and
 // LLM settings aren't hidden — keep it out of the sidebar's eager graph.
@@ -100,20 +101,8 @@ export function Sidebar() {
     return () => window.clearTimeout(timer);
   }, [isMobileNavOpen]);
 
-  React.useEffect(() => {
-    if (!isMobileNavOpen) {
-      return undefined;
-    }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeMobileNav();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isMobileNavOpen, closeMobileNav]);
+  // A menu or the command menu opened over the drawer takes Escape first.
+  useCloseOnEscape(isMobileNavOpen, closeMobileNav);
 
   // Swipe left on the drawer body → close it (mirrors the overlay click and
   // Escape handlers above). Scoped to the drawer element so swipes on the
@@ -233,11 +222,11 @@ export function Sidebar() {
           setCollapsedRailHovered(false);
         }}
         className={cn(
-          "max-md:hidden flex bg-base flex-col min-h-0 transition-[width,min-width] duration-200",
-          "md:border-r md:border-[var(--oh-border)] md:h-full",
+          "max-md:hidden flex bg-canvas-base flex-col min-h-0 transition-[width,min-width] duration-200",
+          "md:border-r md:border-border md:h-full",
           collapsed
-            ? "md:w-[60px] md:min-w-[60px] md:px-2.5"
-            : "md:w-[300px] md:min-w-[300px] pb-2 md:pl-2.5 md:pr-0",
+            ? "md:w-15 md:min-w-15 md:px-2.5"
+            : "md:w-75 md:min-w-75 pb-2 md:pl-2.5 md:pr-0",
           currentPath === "/" && "md:pb-3",
         )}
       >
@@ -268,8 +257,8 @@ export function Sidebar() {
             data-testid="sidebar-mobile-drawer"
             aria-hidden={!mobileDrawerVisible}
             className={cn(
-              "conversation-gesture-host fixed inset-y-0 left-0 z-50 flex min-h-0 w-[min(300px,85vw)] flex-col bg-base",
-              "border-r border-[var(--oh-border)] pb-2 pl-2.5 pr-0 md:hidden",
+              "conversation-gesture-host fixed inset-y-0 left-0 z-50 flex min-h-0 w-[min(300px,85vw)] flex-col bg-canvas-base",
+              "border-r border-border pb-2 pl-2.5 pr-0 md:hidden",
               "transition-transform ease-in-out motion-reduce:transition-none",
               mobileDrawerVisible ? "translate-x-0" : "-translate-x-full",
             )}

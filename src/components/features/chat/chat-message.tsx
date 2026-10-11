@@ -51,7 +51,7 @@ export function ChatMessage({
   onRetry,
   onDismiss,
   onStop,
-isStreaming = false,
+  isStreaming = false,
   timestamp,
 }: React.PropsWithChildren<ChatMessageProps>) {
   const { t, i18n } = useTranslation("openhands");
@@ -166,8 +166,7 @@ isStreaming = false,
         isFromPlanningAgent &&
           type === "agent" &&
           "border border-[#597ff4] bg-tertiary p-4 mt-2",
-        pendingStatus === "error" &&
-          "border border-[var(--oh-status-error)]/40",
+        pendingStatus === "error" && "border border-status-error/40",
         !isPendingUserMessage && "last:mb-4",
       )}
     >
@@ -226,7 +225,7 @@ isStreaming = false,
           aria-hidden={!showStopButton}
           tabIndex={showStopButton ? 0 : -1}
           className={cn(
-            "group absolute z-10 inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-[var(--oh-color-tertiary)] text-[var(--oh-foreground)] transition-opacity duration-150",
+            "group absolute z-10 inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-tertiary text-foreground transition-opacity duration-150",
             isSingleLinePendingMessage
               ? "right-3 top-1/2 -translate-y-1/2"
               : "right-3 bottom-2.5",
@@ -271,14 +270,14 @@ isStreaming = false,
         <div
           role="alert"
           data-testid="chat-message-error"
-          className="flex items-center gap-2 text-xs text-[var(--oh-status-error)]"
+          className="flex items-center gap-2 text-xs text-status-error"
         >
           <span>{t(I18nKey.CHAT_INTERFACE$MESSAGE_SEND_FAILED)}</span>
           {onRetry ? (
             <button
               type="button"
               onClick={onRetry}
-              className="cursor-pointer rounded-md border border-[var(--oh-border)] px-2 py-1 text-xs font-normal text-[var(--oh-foreground)] hover:bg-[var(--oh-interactive-hover)]"
+              className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs font-normal text-foreground hover:bg-interactive-hover"
               data-testid="chat-message-retry"
             >
               {t(I18nKey.CHAT_INTERFACE$MESSAGE_RETRY)}
@@ -288,7 +287,7 @@ isStreaming = false,
             <button
               type="button"
               onClick={onDismiss}
-              className="cursor-pointer rounded-md border border-[var(--oh-border)] px-2 py-1 text-xs font-normal text-[var(--oh-foreground)] hover:bg-[var(--oh-interactive-hover)]"
+              className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs font-normal text-foreground hover:bg-interactive-hover"
               data-testid="chat-message-dismiss"
             >
               {t(I18nKey.CHAT_INTERFACE$MESSAGE_DISMISS)}

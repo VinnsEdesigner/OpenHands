@@ -1,7 +1,8 @@
 import React from "react";
 import { ExtraProps } from "react-markdown";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { CopyableContentWrapper } from "#/components/shared/buttons/copyable-content-wrapper";
+import { useColorTheme } from "#/hooks/use-color-theme";
+import { getSyntaxHighlighterTheme } from "#/themes/syntax-highlighter-themes";
 import { cn } from "#/utils/utils";
 import { SyntaxHighlighter } from "./syntax-highlighter";
 
@@ -39,9 +40,15 @@ function PlainCodeBlock({
  * Build the `code` component used by react-markdown. When `disableHighlight`
  * is true, fenced code blocks skip Prism entirely (plain `<pre>`); inline and
  * unfenced code render identically in both modes.
+ *
+ * The returned component is capitalized (`Code`) because it calls a hook
+ * (`useColorTheme`), and `react-hooks/rules-of-hooks` only treats capitalized
+ * functions as components. The highlighter theme follows the app's
+ * light/dark setting.
  */
 export function createCodeComponent(disableHighlight = false) {
-  return function code({ children, className }: CodeProps) {
+  return function Code({ children, className }: CodeProps) {
+    const colorTheme = useColorTheme();
     const match = /language-(\w+)/.exec(className || ""); // get the language
     const codeString = String(children).replace(/\n$/, "");
 
@@ -82,7 +89,7 @@ export function createCodeComponent(disableHighlight = false) {
       <CopyableContentWrapper text={codeString}>
         <SyntaxHighlighter
           className="rounded-lg"
-          style={vscDarkPlus}
+          style={getSyntaxHighlighterTheme(colorTheme)}
           language={match?.[1]}
           PreTag="div"
         >

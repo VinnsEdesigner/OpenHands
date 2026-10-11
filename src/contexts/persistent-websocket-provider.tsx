@@ -88,9 +88,7 @@ function ConversationConnectionManager({
   const backgroundConversationIds = allConversations
     .filter(
       (conv) =>
-        conv.id &&
-        needsConnection(conv) &&
-        conv.id !== urlConversationId,
+        conv.id && needsConnection(conv) && conv.id !== urlConversationId,
     )
     .map((conv) => conv.id)
     .filter((id, idx, arr) => arr.indexOf(id) === idx);
@@ -124,5 +122,7 @@ export function PersistentWebSocketProvider({
 }: {
   children: React.ReactNode;
 }) {
-  return <ConversationConnectionManager>{children}</ConversationConnectionManager>;
+  return (
+    <ConversationConnectionManager>{children}</ConversationConnectionManager>
+  );
 }

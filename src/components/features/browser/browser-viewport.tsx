@@ -24,7 +24,8 @@ export function BrowserViewport({ src }: BrowserViewportProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   const zoom = ZOOM_STEPS[zoomIndex];
-  const zoomIn = () => setZoomIndex((i) => Math.min(i + 1, ZOOM_STEPS.length - 1));
+  const zoomIn = () =>
+    setZoomIndex((i) => Math.min(i + 1, ZOOM_STEPS.length - 1));
   const zoomOut = () => setZoomIndex((i) => Math.max(i - 1, 0));
 
   return (

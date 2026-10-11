@@ -1,10 +1,13 @@
 import { getAcpProvider as getClientAcpProvider } from "@openhands/typescript-client";
+import type { BackendKind } from "#/api/backend-registry/types";
 import { I18nKey } from "#/i18n/declaration";
 
 export type ACPProviderIcon =
   | "claude-code"
   | "codex"
   | "gemini"
+  | "pi"
+  | "opencode"
   | "cli-generic";
 
 export const ACP_PROVIDER_FALLBACK_ICON: ACPProviderIcon = "cli-generic";
@@ -96,7 +99,7 @@ export interface ACPProviderConfig {
    * still enter a custom override in Settings -> Agent.
    */
   available_models?: ACPModelOption[];
-  /** Model ID preselected for built-in providers so Canvas never saves blank. */
+  /** Model ID preselected for the provider; absent when it picks its own. */
   default_model?: string;
   /**
    * i18n key for the one-line provider description rendered under the
@@ -111,6 +114,8 @@ export interface ACPProviderConfig {
    * parse this registry without importing React components.
    */
   icon?: ACPProviderIcon;
+  /** Offered only on local backends; Cloud runs a fixed set of providers. */
+  local_only?: boolean;
 }
 
 export interface ACPModelOption {
@@ -128,7 +133,7 @@ export interface ACPModelOption {
 // offers — see {@link SURFACED_ACP_PROVIDERS}.
 const ACP_PROVIDER_UI: Record<
   string,
-  { icon: ACPProviderIcon; description_key: I18nKey }
+  { icon: ACPProviderIcon; description_key: I18nKey; local_only?: boolean }
 > = {
   "claude-code": {
     icon: "claude-code",
@@ -142,46 +147,23 @@ const ACP_PROVIDER_UI: Record<
     icon: "gemini",
     description_key: I18nKey.ONBOARDING$AGENT_GEMINI_CLI_DESCRIPTION,
   },
+  pi: {
+    icon: "pi",
+    description_key: I18nKey.ONBOARDING$AGENT_PI_DESCRIPTION,
+    local_only: true,
+  },
+  opencode: {
+    icon: "opencode",
+    description_key: I18nKey.ONBOARDING$AGENT_OPENCODE_DESCRIPTION,
+    local_only: true,
+  },
 };
-
-const CODEX_ASTRA_MODEL: ACPModelOption = {
-  id: "gpt-6-astra",
-  label: "GPT-6 Astra",
-};
-// The pinned ``@openhands/typescript-client`` (1.39.0) still mirrors the
-// pre-Astra codex ``default_command`` (1.1.7), which the Codex ACP wrapper
-// rejects for ``gpt-6-astra``. Until that client release ships the upstream
-// fix, Canvas launches codex with the first tested Astra-compatible version.
-const CODEX_LEGACY_ACP_COMMAND = "npx -y @agentclientprotocol/codex-acp@1.1.7";
-const CODEX_ASTRA_ACP_VERSION = "@agentclientprotocol/codex-acp@1.10.0";
-const CODEX_ASTRA_COMMAND = ["npx", "-y", CODEX_ASTRA_ACP_VERSION];
-
-/**
- * Resolve codex's launch command from the SDK registry, applying the temporary
- * Astra shim only to the exact stale pin the pinned client reports. Any other
- * registry value (including a future ``1.10.0``-or-newer release)is
- * authoritative — so once upstream catches up, this shim stops firing and can
- * be deleted without a separate cleanup pass.
- */
-export function resolveCodexDefaultCommand(
-  registryCommand: readonly string[],
-): string[] {
-  if (registryCommand.join(" ") === CODEX_LEGACY_ACP_COMMAND) {
-    return [...CODEX_ASTRA_COMMAND];
-  }
-  return [...registryCommand];
-}
 
 function getAvailableModels(key: string): ACPModelOption[] | undefined {
-  const models = getClientAcpProvider(key)?.available_models?.map((model) => ({
+  return getClientAcpProvider(key)?.available_models?.map((model) => ({
     id: model.id,
     label: model.label,
   }));
-  if (key !== "codex") return models;
-  return [
-    CODEX_ASTRA_MODEL,
-    ...(models ?? []).filter(({ id }) => id !== CODEX_ASTRA_MODEL.id),
-  ];
 }
 
 /**
@@ -203,18 +185,23 @@ export const ACP_PROVIDERS: ACPProviderConfig[] = Object.entries(
   return {
     key,
     display_name: info?.display_name ?? key,
-    default_command:
-      key === "codex"
-        ? resolveCodexDefaultCommand(info?.default_command ?? [])
-        : info
-          ? [...info.default_command]
-          : [],
+    default_command: info ? [...info.default_command] : [],
     available_models: getAvailableModels(key),
     default_model: info?.default_model ?? undefined,
     description_key: ui.description_key,
     icon: ui.icon,
+    local_only: ui.local_only,
   };
 });
+
+/** The built-in ACP providers a backend of ``kind`` can launch. */
+export function getAcpProvidersForBackend(
+  kind: BackendKind,
+): ACPProviderConfig[] {
+  return kind === "cloud"
+    ? ACP_PROVIDERS.filter((provider) => !provider.local_only)
+    : ACP_PROVIDERS;
+}
 
 export const ACP_CUSTOM_PRESET_KEY = "custom";
 
@@ -303,6 +290,24 @@ const ACP_RESERVED_CREDENTIALS: Record<string, ACPProviderSecretField[]> = {
     {
       name: "GOOGLE_GENAI_USE_VERTEXAI",
       hint_key: I18nKey.ONBOARDING$ACP_SECRET_VERTEXAI_FLAG_HINT,
+    },
+  ],
+  pi: [
+    {
+      name: "PI_AUTH_JSON",
+      secret: true,
+      multiline: true,
+      hint_key: I18nKey.ONBOARDING$ACP_SECRET_FILE_BLOB_HINT,
+      hint_values: { file: "~/.pi/agent/auth.json" },
+    },
+  ],
+  opencode: [
+    {
+      name: "OPENCODE_AUTH_CONTENT",
+      secret: true,
+      multiline: true,
+      hint_key: I18nKey.ONBOARDING$ACP_SECRET_AUTH_CONTENT_HINT,
+      hint_values: { file: "~/.local/share/opencode/auth.json" },
     },
   ],
 };
@@ -516,32 +521,12 @@ export function labelForAcpModel(
  * Build the ``agent_settings_diff`` payload PATCH /api/settings expects
  * for the agent-kind/provider choice the user just made.
  *
- * Used by both the Settings → Agent page and the onboarding "choose
- * agent" step — keeping the shape in one helper means a future change
- * (e.g. always seeding ``acp_command`` from the registry instead of
- * sending ``[]``, or adding new ``acp_*`` reset fields) lands in both
- * surfaces atomically.
- *
- * Returns ``null`` for an unknown ACP provider key by default — the
- * caller can skip the save (the UI shouldn't surface unknown options,
- * but the defensive path keeps a buggy preset list from corrupting
- * settings).
- *
- * Pass ``allowUnknownServer: true`` to opt into pass-through for keys
- * that aren't in {@link ACP_PROVIDERS} or ``ACP_CUSTOM_PRESET_KEY``.
- * The Settings → Agent page uses this when the user opens settings
- * that already carry an ``acp_server`` value canvas's registry
- * doesn't know about (e.g. set out-of-band via the API for a provider
- * we haven't mirrored yet) and saves without changing the command —
- * otherwise the original key would be silently demoted to ``"custom"``.
+ * Returns ``null`` for an unknown ACP provider key — the caller can skip
+ * the save (the UI shouldn't surface unknown options, but the defensive
+ * path keeps a buggy preset list from corrupting settings).
  */
 export function buildAcpAgentSettingsDiff(
   providerKey: string,
-  options: {
-    command?: string[];
-    model?: string | null;
-    allowUnknownServer?: boolean;
-  } = {},
 ): Record<string, unknown> | null {
   if (providerKey === "openhands") {
     // Switching back to OpenHands. The agent-server's ``Settings.update``
@@ -552,29 +537,20 @@ export function buildAcpAgentSettingsDiff(
   }
 
   const isCustom = providerKey === ACP_CUSTOM_PRESET_KEY;
-  const provider = isCustom ? undefined : getAcpProvider(providerKey);
-  if (!isCustom && !provider && !options.allowUnknownServer) {
+  if (!isCustom && !getAcpProvider(providerKey)) {
     return null;
   }
 
-  // Undefined model → the *preferred* default (Vertex-safe for Gemini), not
-  // the raw registry default — see getAcpPreferredDefaultModel.
-  const model =
-    options.model === undefined
-      ? getAcpPreferredDefaultModel(providerKey)
-      : options.model;
-
   // ``acp_args: []`` resets any API-set ``acp_args`` that would
   // otherwise survive and concatenate to ``acp_command`` at spawn time
-  // (the agent-server merges the two before exec). Callers building the
-  // payload from a textarea that already shows the merged command
-  // (Settings → Agent) round-trip correctly — the merged tokens land in
-  // ``acp_command`` here, so no args are lost.
+  // (the agent-server merges the two before exec).
   return {
     agent_kind: "acp",
     acp_server: providerKey,
-    acp_command: options.command ?? [],
+    acp_command: [],
     acp_args: [],
-    acp_model: model ?? null,
+    // The *preferred* default (Vertex-safe for Gemini), not the raw registry
+    // default — see getAcpPreferredDefaultModel.
+    acp_model: getAcpPreferredDefaultModel(providerKey) ?? null,
   };
 }

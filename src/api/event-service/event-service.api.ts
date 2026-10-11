@@ -39,11 +39,13 @@ import type {
  *     these endpoints is `X-Session-API-Key`, not `Authorization: Bearer`.
  *
  * App API calls go directly to the cloud backend with bearer auth. Runtime
- * sandbox calls go through `/api/cloud-proxy`, which avoids depending on CORS
- * for per-conversation runtime hosts.
+ * sandbox calls go **directly** to the per-conversation runtime host from the
+ * browser — the runtime's CORS allowlist
+ * (`OH_ALLOW_CORS_ORIGINS`, set to the Canvas origin in saas-deploy) permits
+ * the cross-origin call, and the `X-Session-API-Key` preflight passes.
  *
- * Local mode keeps the existing typescript-client path: it targets the
- * conversation's host directly via typed client classes.
+ * Local mode targets the conversation's host directly via typed client
+ * classes — the same path cloud mode now uses.
  */
 
 /**
@@ -74,20 +76,6 @@ class EventService {
     request: ConfirmationResponseRequest,
     sessionApiKey?: string | null,
   ): Promise<ConfirmationResponseResponse> {
-    const active = getActiveBackend().backend;
-
-    if (active.kind === "cloud") {
-      return callCloudProxy<ConfirmationResponseResponse>({
-        backend: active,
-        method: "POST",
-        hostOverride: buildHttpBaseUrl(conversationUrl),
-        path: `/api/conversations/${conversationId}/events/respond_to_confirmation`,
-        body: request,
-        authMode: "session-api-key",
-        sessionApiKey,
-      });
-    }
-
     return new ConversationClient(
       getAgentServerClientOptions({
         conversationUrl,
@@ -104,19 +92,6 @@ class EventService {
     conversationUrl: string,
     sessionApiKey?: string | null,
   ): Promise<number> {
-    const active = getActiveBackend().backend;
-
-    if (active.kind === "cloud") {
-      return callCloudProxy<number>({
-        backend: active,
-        method: "GET",
-        hostOverride: buildHttpBaseUrl(conversationUrl),
-        path: `/api/conversations/${conversationId}/events/count`,
-        authMode: "session-api-key",
-        sessionApiKey,
-      });
-    }
-
     return new ConversationClient(
       getAgentServerClientOptions({
         conversationUrl,

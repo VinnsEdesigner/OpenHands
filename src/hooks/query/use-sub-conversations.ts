@@ -48,6 +48,10 @@ export const useSubConversations = (
     staleTime: FIVE_MINUTES,
     gcTime: FIFTEEN_MINUTES,
     retry: false,
+    // Same no-eager-window-focus-refetch rationale as `useUserConversation` —
+    // these two hooks hit the same batch endpoint and would otherwise compound
+    // into the same focus burst.
+    refetchOnWindowFocus: false,
     // Background metadata for the planning sub-conversation; suppress the
     // spurious "Disconnected" toast on transient relay blips (see
     // use-user-conversation.ts for the same rationale).

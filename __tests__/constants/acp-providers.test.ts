@@ -10,14 +10,15 @@ import {
   getAcpProvider,
   getAcpProviderDisplayName,
   getAcpProviderSecrets,
-  resolveCodexDefaultCommand,
 } from "#/constants/acp-providers";
 
 describe("getAcpProviderDisplayName", () => {
-  it("resolves the three built-in registry keys to their human names", () => {
+  it("resolves the built-in registry keys to their human names", () => {
     expect(getAcpProviderDisplayName("claude-code")).toBe("Claude Code");
     expect(getAcpProviderDisplayName("codex")).toBe("Codex");
     expect(getAcpProviderDisplayName("gemini-cli")).toBe("Gemini CLI");
+    expect(getAcpProviderDisplayName("pi")).toBe("Pi");
+    expect(getAcpProviderDisplayName("opencode")).toBe("OpenCode");
   });
 
   it("returns null for the Custom-command preset so callers can fall back to the generic 'ACP' label", () => {
@@ -51,22 +52,10 @@ describe("ACP provider registry", () => {
       const sdk = getClientAcpProvider(provider.key);
       expect(sdk, provider.key).not.toBeNull();
       expect(provider.display_name).toBe(sdk!.display_name);
-      if (provider.key === "codex") {
-        expect(provider.default_command).toEqual([
-          "npx",
-          "-y",
-          "@agentclientprotocol/codex-acp@1.10.0",
-        ]);
-        expect(provider.available_models?.[0]).toEqual({
-          id: "gpt-6-astra",
-          label: "GPT-6 Astra",
-        });
-      } else {
-        expect(provider.default_command).toEqual([...sdk!.default_command]);
-        expect(provider.available_models).toEqual(
-          sdk!.available_models.map((m) => ({ id: m.id, label: m.label })),
-        );
-      }
+      expect(provider.default_command).toEqual([...sdk!.default_command]);
+      expect(provider.available_models).toEqual(
+        sdk!.available_models.map((m) => ({ id: m.id, label: m.label })),
+      );
       expect(provider.default_model).toBe(sdk!.default_model ?? undefined);
       // UI-only overlay stays local.
       expect(provider.icon).toBeTruthy();
@@ -75,7 +64,8 @@ describe("ACP provider registry", () => {
   });
 
   it("keeps every built-in default model in the UX suggestions", () => {
-    for (const provider of ACP_PROVIDERS) {
+    // Pi has no default: it picks a model from whichever credential is set.
+    for (const provider of ACP_PROVIDERS.filter(({ key }) => key !== "pi")) {
       expect(provider.default_model, provider.key).toBeTruthy();
       expect(provider.available_models, provider.key).toBeTruthy();
       expect(
@@ -85,37 +75,6 @@ describe("ACP provider registry", () => {
         provider.key,
       ).toBe(true);
     }
-  });
-
-  it("temporarily overrides only the exact stale codex pin from the pinned client", () => {
-    // Unlike the model dedup, the launch-command shim has a guard: once the pinned
-    // client ships the upstream command, Canvas defers to the registry value so the
-    // temporary shim stops firing without a separate cleanup pass.
-    expect(
-      resolveCodexDefaultCommand([
-        "npx",
-        "-y",
-        "@agentclientprotocol/codex-acp@1.1.7",
-      ]),
-    ).toEqual(["npx", "-y", "@agentclientprotocol/codex-acp@1.10.0"]);
-
-    // Registry values at-or-newer than the tested version stay authoritative —
-    // the shim must never revert a future upstream bump.
-
-    expect(
-      resolveCodexDefaultCommand([
-        "npx",
-        "-y",
-        "@agentclientprotocol/codex-acp@1.10.0",
-      ]),
-    ).toEqual(["npx", "-y", "@agentclientprotocol/codex-acp@1.10.0"]);
-    expect(
-      resolveCodexDefaultCommand([
-        "npx",
-        "-y",
-        "@agentclientprotocol/codex-acp@2.0.0",
-      ]),
-    ).toEqual(["npx", "-y", "@agentclientprotocol/codex-acp@2.0.0"]);
   });
 
   it("does not suggest generic default model placeholders", () => {
@@ -194,6 +153,16 @@ describe("getAcpProviderSecrets — containerized credentials", () => {
       "GEMINI_API_KEY",
       "GEMINI_BASE_URL",
     ]);
+  });
+
+  it("collects the auth.json blob, then the registry api key, for Pi", () => {
+    const names = getAcpProviderSecrets("pi").map((f) => f.name);
+    expect(names).toEqual(["PI_AUTH_JSON", "ANTHROPIC_API_KEY"]);
+  });
+
+  it("collects the auth store, then the Zen api key, for OpenCode", () => {
+    const names = getAcpProviderSecrets("opencode").map((f) => f.name);
+    expect(names).toEqual(["OPENCODE_AUTH_CONTENT", "OPENCODE_API_KEY"]);
   });
 
   it("renders file-content blobs as multiline secret fields", () => {
