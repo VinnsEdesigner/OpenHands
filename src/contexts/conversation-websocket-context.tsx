@@ -1203,6 +1203,14 @@ export function ConversationWebSocketProvider({
       sessionApiKey,
       reconnect: { enabled: true },
       onOpen: () => {
+        // A headless (background) socket exists only to keep the server's
+        // pub/sub subscriber alive so the sandbox is not evicted. It must not
+        // touch any shared UI state: the app keeps one background socket per
+        // running conversation, and each open/close/error would otherwise
+        // fight the foreground socket over the single global error banner —
+        // one socket clearing the connection error while another sets it
+        // produces a banner that flickers at the retry cadence.
+        if (headless) return;
         setMainConnectionState("OPEN");
         hasConnectedRefMain.current = true; // Mark that we've successfully connected
         clearConnectionError(); // Clear a previous connection error; keep sticky conversation errors
@@ -1213,11 +1221,13 @@ export function ConversationWebSocketProvider({
         useEventStore.getState().clearStreamingSlots();
       },
       onClose: () => {
+        if (headless) return;
         setMainConnectionState("CLOSED");
         mainDeltaBatcherRef.current?.reset();
         useEventStore.getState().clearStreamingSlots();
       },
       onError: () => {
+        if (headless) return;
         setMainConnectionState("CLOSED");
         // Only show an error if we've previously connected successfully, and
         // the page is actually visible: a hidden tab is never watching this
@@ -1235,7 +1245,13 @@ export function ConversationWebSocketProvider({
       },
       onMessage: handleMainMessage,
     };
-  }, [handleMainMessage, setErrorMessage, clearConnectionError, sessionApiKey]);
+  }, [
+    handleMainMessage,
+    setErrorMessage,
+    clearConnectionError,
+    sessionApiKey,
+    headless,
+  ]);
 
   // Separate WebSocket options for planning agent connection
   const planningWebsocketOptions: WebSocketHookOptions = useMemo(() => {
@@ -1256,6 +1272,12 @@ export function ConversationWebSocketProvider({
       sessionApiKey: planningApiKey,
       reconnect: { enabled: true },
       onOpen: async () => {
+        // See the main socket: a headless (background) socket keeps the
+        // subscriber alive only and must not touch shared UI state — otherwise
+        // one background socket per running conversation fights the foreground
+        // socket over the global error banner (flicker at the retry cadence)
+        // and needlessly fetches event counts.
+        if (headless) return;
         setPlanningConnectionState("OPEN");
         hasConnectedRefPlanning.current = true; // Mark that we've successfully connected
         clearConnectionError(); // Clear a previous connection error; keep sticky conversation errors
@@ -1290,11 +1312,13 @@ export function ConversationWebSocketProvider({
         }
       },
       onClose: () => {
+        if (headless) return;
         setPlanningConnectionState("CLOSED");
         planningDeltaBatcherRef.current?.reset();
         useEventStore.getState().clearStreamingSlots(true);
       },
       onError: () => {
+        if (headless) return;
         setPlanningConnectionState("CLOSED");
         // See the main socket's onError: skip the banner for a hidden-tab
         // drop, which is about to be silently retried on foreground.
@@ -1313,6 +1337,7 @@ export function ConversationWebSocketProvider({
     clearConnectionError,
     sessionApiKey,
     subConversations,
+    headless,
   ]);
 
   // Only attempt WebSocket connection when we have a valid URL
