@@ -92,6 +92,27 @@ class EventService {
     conversationUrl: string,
     sessionApiKey?: string | null,
   ): Promise<number> {
+    const active = getActiveBackend().backend;
+
+    // Cloud mode: the per-conversation runtime host only allows CORS from
+    // `app.all-hands.dev`, so a direct browser call from a self-hosted Canvas
+    // origin fails silently. That count is what anchors the session socket's
+    // resume cursor (`after_seq`) — without it the socket falls back to `-1`
+    // and replays the entire event log one event at a time, so the
+    // conversation visibly "re-loads" from the first message. Route it through
+    // the same-origin proxy (which injects the credential server-side), the
+    // same way `searchEvents` already does for the runtime history endpoint.
+    if (active.kind === "cloud") {
+      return callCloudProxy<number>({
+        backend: active,
+        method: "GET",
+        hostOverride: buildHttpBaseUrl(conversationUrl),
+        path: `/api/conversations/${conversationId}/events/count`,
+        authMode: "session-api-key",
+        sessionApiKey,
+      });
+    }
+
     return new ConversationClient(
       getAgentServerClientOptions({
         conversationUrl,
