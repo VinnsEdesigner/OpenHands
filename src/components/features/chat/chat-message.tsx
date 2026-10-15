@@ -144,6 +144,7 @@ export function ChatMessage({
         allowHtml={type !== "user"}
         disableHighlight={isStreaming}
         components={chatBubbleMarkdownComponents}
+        streaming={isStreaming}
       >
         {message}
       </MarkdownRenderer>

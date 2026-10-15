@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { FileText, MessageSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -92,8 +92,14 @@ export function ConversationMain() {
     setIsRightPanelShown,
     setSelectedTab,
   } = useConversationStore();
-  const [isAutomationSetupModeHandoff, setIsAutomationSetupModeHandoff] =
-    useState(() => consumeAutomationSetupHandoff(conversationId));
+  // Derived per conversation during render: holding it in state reset by an
+  // effect let the first render after a conversation switch reuse the previous
+  // conversation's handoff, mounting the setup panel (which tags the
+  // conversation as an automation setup) on the wrong conversation.
+  const isAutomationSetupModeHandoff = useMemo(
+    () => consumeAutomationSetupHandoff(conversationId),
+    [conversationId],
+  );
   const [automationToolbarElement, setAutomationToolbarElement] =
     useState<HTMLDivElement | null>(null);
   const [isAutomationAgentHidden, setIsAutomationAgentHidden] = useState(false);
@@ -192,12 +198,6 @@ export function ConversationMain() {
     },
     enabled: !isMobile && isRightPanelShown,
   });
-
-  useEffect(() => {
-    setIsAutomationSetupModeHandoff(
-      consumeAutomationSetupHandoff(conversationId),
-    );
-  }, [conversationId]);
 
   useEffect(() => {
     if (!automationSetupDraft) return;

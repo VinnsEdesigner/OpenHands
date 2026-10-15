@@ -15,6 +15,8 @@ import { table, th, td } from "./table";
 import { blockquote } from "./blockquote";
 import { hr } from "./horizontal-rule";
 import { remarkGithubAlerts } from "./remark-github-alerts";
+import { advanceStableMarkdownBoundary } from "#/utils/split-stable-markdown";
+import { RevealClock, rehypeFadeInWords } from "./rehype-fade-in-words";
 
 // Build a sanitize schema that extends rehype-sanitize's defaults with a
 // few markdown-friendly additions. The defaults strip `<script>`, event
@@ -118,23 +120,108 @@ interface MarkdownRendererProps {
    */
   allowHtml?: boolean;
   /**
-   * Skip syntax highlighting for fenced code blocks and render them as
-   * plain copyable `<pre>`. Use this while a message is actively
-   * streaming: Prism tokenization is the most expensive step in the
-   * markdown pipeline, so deferring it until the message settles keeps a
-   * fast model's token stream from blocking the main thread every frame.
-   * The block snaps to highlighted on the first render with
-   * `disableHighlight` false (i.e. once the message is settled).
+   * Skip syntax highlighting for fenced code blocks and render them as plain
+   * copyable `<pre>`. Use this while a message is actively streaming: Prism
+   * tokenization is the most expensive step in the markdown pipeline, so
+   * deferring it until the message settles keeps a fast model's token stream
+   * from blocking the main thread every frame. The block snaps to highlighted
+   * on the first render with `disableHighlight` false (once settled).
    */
   disableHighlight?: boolean;
+  /**
+   * The content is still being appended to (a streamed reply). Finished
+   * blocks are then parsed once and only the tail is re-parsed per update,
+   * so a long reply does not cost a full parse every frame. Newly revealed
+   * words fade in.
+   */
+  streaming?: boolean;
 }
 
-// `remarkPlugins` is a module-level constant: the plugin list never changes,
-// so a single stable array reference is reused across every render. Passing a
-// fresh array literal to react-markdown on each render would defeat its
-// internal memoization and force a full re-parse even when the content is
-// unchanged.
-const REMARK_PLUGINS = [remarkGithubAlerts, remarkGfm, remarkBreaks];
+const remarkPlugins: PluggableList = [
+  remarkGithubAlerts,
+  remarkGfm,
+  remarkBreaks,
+];
+
+// `rehype-raw` parses raw HTML embedded in the markdown into the rehype
+// tree. `rehype-sanitize` then strips anything dangerous (scripts,
+// event handlers, `javascript:` URLs, etc.). The order matters: sanitize
+// must run *after* raw so it sees the parsed HTML nodes.
+const htmlRehypePlugins: PluggableList = [
+  rehypeRaw,
+  [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA],
+];
+
+function MarkdownBlockComponent({
+  source,
+  components,
+  rehypePlugins,
+  clock,
+  blockStart,
+}: {
+  source: string;
+  components: Components;
+  rehypePlugins: PluggableList | undefined;
+  /** Set while streaming: fade in words as they are revealed. */
+  clock: RevealClock | undefined;
+  blockStart: number;
+}) {
+  return (
+    <Markdown
+      components={components}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={
+        clock
+          ? [
+              ...(rehypePlugins ?? []),
+              [rehypeFadeInWords, { clock, blockStart }],
+            ]
+          : rehypePlugins
+      }
+    >
+      {source}
+    </Markdown>
+  );
+}
+
+const MarkdownBlock = React.memo(MarkdownBlockComponent);
+
+/**
+ * Split streamed markdown into its stable blocks plus the tail, remembering
+ * the boundaries so each update parses only the text after the last one, and
+ * record when each part was revealed. Text that is not an extension of the
+ * previous render (a retry) starts over, shown at once.
+ */
+function useStreamedMarkdownBlocks(text: string, streaming: boolean) {
+  const previousRef = React.useRef({ text: "", offsets: [0] });
+  const [clock] = React.useState(() => new RevealClock());
+
+  const blocks = React.useMemo(() => {
+    if (!streaming) {
+      return [{ source: text, start: 0 }];
+    }
+    const previous = previousRef.current;
+    const isExtension = text.startsWith(previous.text);
+    if (isExtension) {
+      clock.advance(text.length);
+    } else {
+      clock.reset(text.length);
+    }
+    const offsets = isExtension ? [...previous.offsets] : [0];
+    const last = offsets[offsets.length - 1];
+    const boundary = advanceStableMarkdownBoundary(text, last);
+    if (boundary > last) {
+      offsets.push(boundary);
+    }
+    previousRef.current = { text, offsets };
+    return offsets.map((start, index) => ({
+      source: text.slice(start, offsets[index + 1]),
+      start,
+    }));
+  }, [text, streaming, clock]);
+
+  return { blocks, clock: streaming ? clock : undefined };
+}
 
 /**
  * A reusable Markdown renderer component that provides consistent
@@ -148,16 +235,8 @@ const REMARK_PLUGINS = [remarkGithubAlerts, remarkGfm, remarkBreaks];
  * - includeStandard: adds anchor and paragraph components
  * - includeHeadings: adds h1-h6 heading components
  * - components prop: allows custom overrides or additional components
- *
- * Performance: wrapped in `React.memo` with a content-keyed comparator. A
- * settled message (content unchanged between renders) is returned from cache
- * without re-running the react-markdown pipeline at all — this is what keeps
- * rendering cost independent of how many messages already exist in the
- * conversation. Only the actively-streaming message, whose content changes
- * each flush, re-parses; and with `disableHighlight` it does so without the
- * Prism tokenization cost until it settles.
  */
-function MarkdownRendererImpl({
+function MarkdownRendererComponent({
   children,
   content,
   components: customComponents,
@@ -165,15 +244,11 @@ function MarkdownRendererImpl({
   includeHeadings = false,
   allowHtml = true,
   disableHighlight = false,
+  streaming = false,
 }: MarkdownRendererProps) {
-  // The components object is memoized so its reference is stable across
-  // renders that don't change the configuration. A fresh object literal here
-  // would propagate a new `components` prop into react-markdown every render
-  // and invalidate its memo, re-parsing even when the markdown string is
-  // identical. The `code` component is built from `createCodeComponent` so it
-  // can switch between highlighted and plain rendering without disturbing the
-  // rest of the map.
-  const components: Components = React.useMemo(
+  // Build the components object with defaults and optional additions.
+  // Memoized so streamed blocks that did not change skip re-rendering.
+  const components = React.useMemo<Components>(
     () => ({
       code: createCodeComponent(disableHighlight),
       ul,
@@ -198,48 +273,57 @@ function MarkdownRendererImpl({
       }),
       ...customComponents, // Custom components override defaults
     }),
-    // customComponents is a stable ref for real callers (module-level consts
-    // like `chatBubbleMarkdownComponents`, or undefined). If a caller ever
-    // passes an inline object it opts out of memoization here, which is the
-    // correct (safe) fallback.
-    [includeStandard, includeHeadings, disableHighlight, customComponents],
+    [
+      customComponents,
+      includeStandard,
+      includeHeadings,
+      disableHighlight,
+    ],
   );
 
-  const markdownContent = content ?? children ?? "";
-
-  // `rehype-raw` parses raw HTML embedded in the markdown into the rehype
-  // tree. `rehype-sanitize` then strips anything dangerous (scripts,
-  // event handlers, `javascript:` URLs, etc.). The order matters: sanitize
-  // must run *after* raw so it sees the parsed HTML nodes.
-  const rehypePlugins: PluggableList | undefined = React.useMemo(
-    () =>
-      allowHtml
-        ? [rehypeRaw, [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA]]
-        : undefined,
-    [allowHtml],
+  const { blocks, clock } = useStreamedMarkdownBlocks(
+    content ?? children ?? "",
+    streaming,
   );
+  const rehypePlugins = allowHtml ? htmlRehypePlugins : undefined;
 
+  // Blocks render as siblings in one wrapper, joined by the newline the
+  // parser puts between top-level blocks, so the DOM (and `first:` / `last:`
+  // spacing) matches the finished message rendered in one piece.
   return (
     <div data-testid="markdown-renderer">
-      <Markdown
-        components={components}
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={rehypePlugins}
-      >
-        {markdownContent}
-      </Markdown>
+      {blocks.map(({ source, start }, index) => (
+        // Blocks only ever append, so the index is a stable identity.
+        <React.Fragment key={index}>
+          {index > 0 && "\n"}
+          <MarkdownBlock
+            source={source}
+            components={components}
+            rehypePlugins={rehypePlugins}
+            clock={clock}
+            blockStart={start}
+          />
+        </React.Fragment>
+      ))}
     </div>
   );
 }
 
+// Parsing markdown and highlighting fenced code are expensive for long chat
+// histories. Keep unchanged bodies stable while their surrounding message
+// wrappers respond to tail, grouping, and conversation-state updates. The
+// comparator re-renders only when a prop that affects the output changes — in
+// particular it lets `disableHighlight` flip false when a message settles, so
+// the code block snaps from plain `<pre>` to highlighted.
 export const MarkdownRenderer = React.memo(
-  MarkdownRendererImpl,
+  MarkdownRendererComponent,
   (prev, next) =>
     (prev.content ?? prev.children) === (next.content ?? next.children) &&
     prev.includeStandard === next.includeStandard &&
     prev.includeHeadings === next.includeHeadings &&
     prev.allowHtml === next.allowHtml &&
     prev.disableHighlight === next.disableHighlight &&
+    prev.streaming === next.streaming &&
     prev.components === next.components,
 );
 
